@@ -7,7 +7,7 @@ such as users, passwords and other configuration.
 
 # Getting Started
 
-Poststack features an automatic bootstrap process that guides you through setting up your database and services from scratch. No complex configuration files or manual database setup required!
+Poststack features a powerful CLI bootstrap tool that handles container image building, database setup, and schema management. All operations are logged for transparency and debugging.
 
 ## Quick Start
 
@@ -16,52 +16,81 @@ Poststack features an automatic bootstrap process that guides you through settin
    - Podman (or Docker)
    - PostgreSQL client tools (optional)
 
-2. **Start the Server**
+2. **Run the Bootstrap CLI**
    ```bash
+   # Full setup process (recommended for first-time setup)
+   python poststack-bootstrap.py setup --build-images --url "postgresql://user:password@localhost:5432/poststack"
+   
+   # Or run individual commands
+   python poststack-bootstrap.py build-images
+   python poststack-bootstrap.py verify-db --url "postgresql://user:password@localhost:5432/poststack"
+   python poststack-bootstrap.py init-schema --url "postgresql://user:password@localhost:5432/poststack"
+   ```
+
+3. **Monitor Progress**
+   - All operations log progress to stdout/stderr
+   - Detailed logs are written to the `logs/` directory
+   - Container builds logged to `logs/containers/`
+   - Database operations logged to `logs/database/`
+
+4. **Start the Server**
+   ```bash
+   # After bootstrap completes
    python poststack.py
    ```
 
-3. **Follow the Bootstrap Wizard**
-   - If no database is configured, you'll be automatically directed to http://localhost:8080/bootstrap
-   - Enter your PostgreSQL connection details
-   - The system will test the connection and guide you through any issues
-
-4. **Initialize the Schema**
-   - If your database is empty, Poststack will offer to create all necessary tables
-   - Review the pending changes before applying
-   - The schema is managed by Liquibase for safe, versioned updates
-
 5. **Configure Your Services**
-   - Once the database is ready, configure your domain and services
+   - Access the web interface at http://localhost:8000
+   - Configure your domain and services
    - Enable the services you need (Apache, Mail, DNS, etc.)
    - All configuration is stored centrally in PostgreSQL
 
-## Bootstrap Process
+## Bootstrap CLI Commands
 
-The bootstrap process handles three scenarios automatically:
+The bootstrap CLI provides individual commands for different operations:
 
-### No Database Configuration
-- Starts a minimal web server on port 8080
-- Provides a form to enter PostgreSQL connection details
-- Validates and saves the configuration
+### Image Building
+```bash
+# Build all container images
+python poststack-bootstrap.py build-images
 
-### Empty Database
-- Detects missing schema
-- Offers to initialize all tables using Liquibase
-- Shows exactly what will be created before proceeding
+# Build images in parallel (faster)
+python poststack-bootstrap.py build-images --parallel
+```
 
-### Schema Updates Available
-- Detects pending schema changes
-- Shows a preview of changes
-- Allows you to update or skip
+### Database Operations
+```bash
+# Verify database connectivity
+python poststack-bootstrap.py verify-db --url "postgresql://user:password@localhost:5432/poststack"
+
+# Initialize empty database schema
+python poststack-bootstrap.py init-schema --url "postgresql://user:password@localhost:5432/poststack"
+
+# Update existing database schema
+python poststack-bootstrap.py update-schema --url "postgresql://user:password@localhost:5432/poststack"
+```
+
+### Full Setup
+```bash
+# Complete bootstrap process
+python poststack-bootstrap.py setup --build-images --url "postgresql://user:password@localhost:5432/poststack"
+```
 
 ## Environment Variables
 
-For automated deployments, you can skip the interactive bootstrap:
+For automated deployments, you can use environment variables instead of command-line arguments:
 
 ```bash
 # Set database URL
 export DATABASE_URL="postgresql://user:password@localhost:5432/poststack"
+
+# Run bootstrap commands (DATABASE_URL will be used automatically)
+python poststack-bootstrap.py build-images
+python poststack-bootstrap.py verify-db
+python poststack-bootstrap.py init-schema
+
+# Or run full setup
+python poststack-bootstrap.py setup --build-images
 
 # Start the server
 python poststack.py
@@ -69,12 +98,25 @@ python poststack.py
 
 ## Next Steps
 
-After bootstrap completes:
+After bootstrap completes successfully:
 
-1. Access the main dashboard at http://localhost:8000
-2. Configure your primary domain and Let's Encrypt email
-3. Enable and configure the services you need
-4. Deploy your containers using the generated configurations
+1. **Start the main server**: `python poststack.py`
+2. **Access the web interface**: http://localhost:8000
+3. **Configure your domain**: Set your primary domain and Let's Encrypt email
+4. **Enable services**: Turn on the services you need (Apache, Mail, DNS, etc.)
+5. **Deploy containers**: Use the generated configurations to deploy your services
+
+## Logging and Debugging
+
+All bootstrap operations create detailed logs:
+
+- **Console Output**: Progress and summary information
+- **Main Logs**: `logs/bootstrap_YYYYMMDD_HHMMSS.log`
+- **Container Builds**: `logs/containers/[image]_build_YYYYMMDD_HHMMSS.log`
+- **Database Operations**: `logs/database/liquibase_[operation]_YYYYMMDD_HHMMSS.log`
+
+Use `--verbose` flag for more detailed console output.
 
 For detailed configuration options, see [Configuration Documentation](docs/configuration.md).
-For architectural details, see [Core Architecture](docs/core-architecture.md).
+For architectural details, see [Core Architecture](docs/core-container-architecture.md).
+For bootstrap implementation details, see [Bootstrap CLI Documentation](docs/bootstrap.md).
