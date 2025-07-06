@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.0.xsd">
+
+    <!-- Indexes for Poststack v1.0 schema -->
+    
+    <changeSet id="101-create-system-info-indexes" author="poststack">
+        <createIndex indexName="idx_system_info_key" schemaName="poststack" tableName="system_info">
+            <column name="key"/>
+        </createIndex>
+        <rollback>
+            <dropIndex indexName="idx_system_info_key" schemaName="poststack" tableName="system_info"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="102-create-services-indexes" author="poststack">
+        <createIndex indexName="idx_services_type" schemaName="poststack" tableName="services">
+            <column name="type"/>
+        </createIndex>
+        <createIndex indexName="idx_services_status" schemaName="poststack" tableName="services">
+            <column name="status"/>
+        </createIndex>
+        <createIndex indexName="idx_services_name" schemaName="poststack" tableName="services">
+            <column name="name"/>
+        </createIndex>
+        <rollback>
+            <dropIndex indexName="idx_services_type" schemaName="poststack" tableName="services"/>
+            <dropIndex indexName="idx_services_status" schemaName="poststack" tableName="services"/>
+            <dropIndex indexName="idx_services_name" schemaName="poststack" tableName="services"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="103-create-containers-indexes" author="poststack">
+        <createIndex indexName="idx_containers_service_id" schemaName="poststack" tableName="containers">
+            <column name="service_id"/>
+        </createIndex>
+        <createIndex indexName="idx_containers_status" schemaName="poststack" tableName="containers">
+            <column name="status"/>
+        </createIndex>
+        <createIndex indexName="idx_containers_container_id" schemaName="poststack" tableName="containers">
+            <column name="container_id"/>
+        </createIndex>
+        <rollback>
+            <dropIndex indexName="idx_containers_service_id" schemaName="poststack" tableName="containers"/>
+            <dropIndex indexName="idx_containers_status" schemaName="poststack" tableName="containers"/>
+            <dropIndex indexName="idx_containers_container_id" schemaName="poststack" tableName="containers"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="104-create-certificates-indexes" author="poststack">
+        <createIndex indexName="idx_certificates_domain" schemaName="poststack" tableName="certificates">
+            <column name="domain"/>
+        </createIndex>
+        <createIndex indexName="idx_certificates_status" schemaName="poststack" tableName="certificates">
+            <column name="status"/>
+        </createIndex>
+        <createIndex indexName="idx_certificates_expires_at" schemaName="poststack" tableName="certificates">
+            <column name="expires_at"/>
+        </createIndex>
+        <rollback>
+            <dropIndex indexName="idx_certificates_domain" schemaName="poststack" tableName="certificates"/>
+            <dropIndex indexName="idx_certificates_status" schemaName="poststack" tableName="certificates"/>
+            <dropIndex indexName="idx_certificates_expires_at" schemaName="poststack" tableName="certificates"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

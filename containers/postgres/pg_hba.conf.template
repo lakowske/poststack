@@ -1,0 +1,25 @@
+# PostgreSQL Client Authentication Configuration Template
+# This template will be processed by the entrypoint script
+
+# TYPE  DATABASE        USER            ADDRESS                 METHOD
+
+# "local" is for Unix domain socket connections only
+local   all             postgres                                peer
+local   all             all                                     ${POSTGRES_LOCAL_AUTH_METHOD:-md5}
+
+# IPv4 local connections:
+host    all             postgres        127.0.0.1/32            trust
+host    all             all             127.0.0.1/32            ${POSTGRES_HOST_AUTH_METHOD:-md5}
+
+# IPv6 local connections:
+host    all             postgres        ::1/128                 trust
+host    all             all             ::1/128                 ${POSTGRES_HOST_AUTH_METHOD:-md5}
+
+# Container network connections (adjust based on your network setup)
+host    all             all             172.16.0.0/12           ${POSTGRES_CONTAINER_AUTH_METHOD:-md5}
+host    all             all             192.168.0.0/16          ${POSTGRES_CONTAINER_AUTH_METHOD:-md5}
+host    all             all             10.0.0.0/8              ${POSTGRES_CONTAINER_AUTH_METHOD:-md5}
+
+# SSL connections from anywhere (if SSL is enabled)
+${POSTGRES_SSL_ENABLED:+hostssl    all             all             0.0.0.0/0               md5}
+${POSTGRES_SSL_ENABLED:+hostssl    all             all             ::/0                    md5}

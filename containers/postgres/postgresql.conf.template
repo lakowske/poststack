@@ -1,0 +1,48 @@
+# PostgreSQL Configuration Template for Poststack
+# This template will be processed by the entrypoint script
+
+# Connection settings
+listen_addresses = '*'
+port = 5432
+max_connections = ${POSTGRES_MAX_CONNECTIONS:-100}
+
+# Memory settings
+shared_buffers = ${POSTGRES_SHARED_BUFFERS:-128MB}
+effective_cache_size = ${POSTGRES_EFFECTIVE_CACHE_SIZE:-1GB}
+
+# Logging
+log_destination = 'stderr'
+logging_collector = on
+log_directory = '/data/postgres/logs'
+log_filename = 'postgresql-%Y-%m-%d_%H%M%S.log'
+log_rotation_size = 10MB
+log_min_duration_statement = ${POSTGRES_LOG_MIN_DURATION:-1000}
+log_line_prefix = '%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h '
+log_statement = '${POSTGRES_LOG_STATEMENT:-none}'
+
+# SSL settings (will be configured if certificates are available)
+ssl = ${POSTGRES_SSL:-off}
+ssl_cert_file = '${POSTGRES_SSL_CERT_FILE:-/data/certificates/server.crt}'
+ssl_key_file = '${POSTGRES_SSL_KEY_FILE:-/data/certificates/server.key}'
+ssl_ca_file = '${POSTGRES_SSL_CA_FILE:-/data/certificates/ca.crt}'
+
+# Performance tuning
+checkpoint_completion_target = 0.9
+wal_buffers = ${POSTGRES_WAL_BUFFERS:-16MB}
+default_statistics_target = 100
+
+# Locale settings
+lc_messages = 'en_US.utf8'
+lc_monetary = 'en_US.utf8'
+lc_numeric = 'en_US.utf8'
+lc_time = 'en_US.utf8'
+
+# Default configuration for sorting
+default_text_search_config = 'pg_catalog.english'
+
+# Archive settings (for backup/replication if needed)
+archive_mode = ${POSTGRES_ARCHIVE_MODE:-off}
+archive_command = '${POSTGRES_ARCHIVE_COMMAND:-test ! -f /data/postgres/archive/%f && cp %p /data/postgres/archive/%f}'
+
+# Timezone
+timezone = '${TZ:-UTC}'

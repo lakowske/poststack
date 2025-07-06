@@ -1,0 +1,39 @@
+# Liquibase Configuration Template for Poststack
+# This template will be processed by the entrypoint script
+
+# Database connection settings
+url=${DATABASE_URL:-jdbc:postgresql://${DATABASE_HOST:-localhost}:${DATABASE_PORT:-5432}/${DATABASE_NAME:-poststack}}
+username=${DATABASE_USER:-poststack}
+password=${DATABASE_PASSWORD}
+driver=org.postgresql.Driver
+
+# Changelog settings
+changeLogFile=${LIQUIBASE_CHANGELOG_FILE:-/data/liquibase/changelogs/master.xml}
+
+# Context and label filtering
+contexts=${LIQUIBASE_CONTEXTS}
+labels=${LIQUIBASE_LABELS}
+
+# Output settings
+outputFile=/data/liquibase/logs/liquibase-output.log
+logLevel=${LIQUIBASE_LOG_LEVEL:-INFO}
+
+# Liquibase behavior settings
+classpath=/opt/liquibase/lib/postgresql.jar
+
+# Schema settings
+defaultSchemaName=poststack
+liquibaseSchemaName=liquibase
+
+# Backup settings
+outputDefaultSchema=true
+outputDefaultCatalog=true
+
+# Performance settings
+shouldRun=true
+
+# Security settings
+strict=true
+
+# Snapshot settings
+snapshotFormat=json
