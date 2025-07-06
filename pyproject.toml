@@ -56,7 +56,7 @@ Repository = "https://github.com/lakowske/poststack"
 Issues = "https://github.com/lakowske/poststack/issues"
 
 [project.scripts]
-poststack-bootstrap = "poststack.bootstrap:main"
+poststack = "poststack.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

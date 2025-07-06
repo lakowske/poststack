@@ -72,7 +72,7 @@ class PoststackConfig(BaseSettings):
         description="Let's Encrypt notification email",
     )
     cert_path: str = Field(
-        default="/data/certificates",
+        default="certificates",
         description="Path for certificate storage",
     )
 
