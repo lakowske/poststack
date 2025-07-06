@@ -16,6 +16,7 @@ from .config import PoststackConfig, load_config
 from .database import database
 from .logging_config import setup_logging
 from .real_container_builder import RealContainerBuilder
+from .container_runtime import ContainerLifecycleManager
 
 # Global configuration object
 config: Optional[PoststackConfig] = None
@@ -295,6 +296,213 @@ def container_clean(ctx: click.Context, test_only: bool, force: bool) -> None:
         
     except Exception as e:
         click.echo(f"❌ Cleanup failed: {e}", err=True)
+        sys.exit(1)
+
+
+@container.command("start")
+@click.option(
+    "--postgres-port",
+    type=int,
+    default=5433,
+    help="PostgreSQL port (default: 5433)",
+)
+@click.option(
+    "--wait-timeout",
+    type=int,
+    default=120,
+    help="Timeout for waiting for services to be ready (default: 120s)",
+)
+@click.pass_context
+def container_start(ctx: click.Context, postgres_port: int, wait_timeout: int) -> None:
+    """Start container test environment."""
+    config = ctx.obj["config"]
+    
+    click.echo("🚀 Starting container test environment...")
+    
+    try:
+        lifecycle_manager = ContainerLifecycleManager(config)
+        
+        postgres_result, health_result = lifecycle_manager.start_test_environment(
+            postgres_port=postgres_port,
+            cleanup_on_failure=True,
+        )
+        
+        if postgres_result.success and health_result and health_result.passed:
+            click.echo(f"✅ PostgreSQL container started successfully")
+            click.echo(f"   Container: {postgres_result.container_name}")
+            click.echo(f"   Port: {postgres_port}")
+            click.echo(f"   Health: {health_result.message}")
+            click.echo(f"   Database URL: postgresql://poststack:poststack_dev@localhost:{postgres_port}/poststack")
+            
+            # Show running containers
+            running = lifecycle_manager.get_running_containers()
+            if running:
+                click.echo(f"\n📦 Running containers: {', '.join(running)}")
+        else:
+            click.echo("❌ Failed to start test environment")
+            if not postgres_result.success:
+                click.echo(f"   PostgreSQL error: {postgres_result.logs}")
+            if health_result and not health_result.passed:
+                click.echo(f"   Health check error: {health_result.message}")
+            sys.exit(1)
+            
+    except Exception as e:
+        click.echo(f"❌ Failed to start containers: {e}", err=True)
+        sys.exit(1)
+
+
+@container.command("stop")
+@click.option(
+    "--all",
+    "stop_all",
+    is_flag=True,
+    help="Stop all running containers",
+)
+@click.argument("container_names", nargs=-1)
+@click.pass_context
+def container_stop(ctx: click.Context, stop_all: bool, container_names: tuple) -> None:
+    """Stop running containers."""
+    config = ctx.obj["config"]
+    
+    try:
+        lifecycle_manager = ContainerLifecycleManager(config)
+        
+        if stop_all:
+            click.echo("🛑 Stopping all test containers...")
+            success = lifecycle_manager.cleanup_test_environment()
+            
+            if success:
+                click.echo("✅ All containers stopped and cleaned up")
+            else:
+                click.echo("⚠️  Some containers failed to stop cleanly")
+                sys.exit(1)
+        elif container_names:
+            click.echo(f"🛑 Stopping containers: {', '.join(container_names)}")
+            
+            stopped_count = 0
+            for container_name in container_names:
+                try:
+                    result = lifecycle_manager.postgres_runner.stop_container(container_name)
+                    if result.success:
+                        click.echo(f"✅ Stopped {container_name}")
+                        stopped_count += 1
+                    else:
+                        click.echo(f"❌ Failed to stop {container_name}")
+                except Exception as e:
+                    click.echo(f"❌ Error stopping {container_name}: {e}")
+            
+            click.echo(f"\n🎉 Stopped {stopped_count}/{len(container_names)} containers")
+        else:
+            click.echo("❓ Please specify container names or use --all flag")
+            sys.exit(1)
+            
+    except Exception as e:
+        click.echo(f"❌ Failed to stop containers: {e}", err=True)
+        sys.exit(1)
+
+
+@container.command("status")
+@click.pass_context
+def container_status(ctx: click.Context) -> None:
+    """Show status of Poststack containers."""
+    config = ctx.obj["config"]
+    
+    try:
+        lifecycle_manager = ContainerLifecycleManager(config)
+        
+        # Check common container names
+        container_names = [
+            "poststack-postgres-test",
+            "poststack-postgres",
+            "poststack-liquibase-temp",
+        ]
+        
+        click.echo("📊 Container Status:")
+        click.echo("-" * 50)
+        
+        running_count = 0
+        for container_name in container_names:
+            status = lifecycle_manager.postgres_runner.get_container_status(container_name)
+            
+            if status:
+                status_icon = "✅" if status.running else "⏹️"
+                click.echo(f"{status_icon} {container_name}")
+                click.echo(f"   Status: {status.status.value}")
+                click.echo(f"   Image: {status.image_name}")
+                click.echo(f"   ID: {status.container_id[:12] if status.container_id else 'N/A'}")
+                
+                if status.running:
+                    running_count += 1
+                    # Perform health check
+                    if "postgres" in container_name:
+                        health = lifecycle_manager.postgres_runner.health_check_postgres(container_name)
+                        health_icon = "✅" if health.passed else "❌"
+                        click.echo(f"   Health: {health_icon} {health.message}")
+            else:
+                click.echo(f"❌ {container_name} (not found)")
+        
+        click.echo("-" * 50)
+        click.echo(f"Running: {running_count} containers")
+        
+    except Exception as e:
+        click.echo(f"❌ Failed to get container status: {e}", err=True)
+        sys.exit(1)
+
+
+@container.command("health")
+@click.argument("container_name", required=False)
+@click.option(
+    "--postgres-port",
+    type=int,
+    default=5433,
+    help="PostgreSQL port for health check (default: 5433)",
+)
+@click.pass_context
+def container_health(ctx: click.Context, container_name: str, postgres_port: int) -> None:
+    """Perform health checks on containers."""
+    config = ctx.obj["config"]
+    
+    try:
+        lifecycle_manager = ContainerLifecycleManager(config)
+        
+        if not container_name:
+            # Check all known containers
+            container_name = "poststack-postgres-test"
+        
+        click.echo(f"🏥 Performing health check on {container_name}...")
+        
+        # Basic running check
+        basic_health = lifecycle_manager.postgres_runner.health_check(container_name)
+        click.echo(f"   Running: {'✅' if basic_health.passed else '❌'} {basic_health.message}")
+        
+        # PostgreSQL specific health check
+        if "postgres" in container_name:
+            postgres_health = lifecycle_manager.postgres_runner.health_check_postgres(
+                container_name, port=postgres_port
+            )
+            click.echo(f"   PostgreSQL: {'✅' if postgres_health.passed else '❌'} {postgres_health.message}")
+            
+            if postgres_health.response_time:
+                click.echo(f"   Response time: {postgres_health.response_time:.2f}s")
+            
+            # Side effects verification
+            side_effects = lifecycle_manager.postgres_runner.verify_postgres_side_effects(
+                container_name, postgres_port
+            )
+            
+            click.echo("   Side effects:")
+            for check, result in side_effects.items():
+                icon = "✅" if result else "❌"
+                click.echo(f"     {icon} {check.replace('_', ' ').title()}")
+        
+        # Liquibase health check if database URL available
+        if config.is_database_configured:
+            database_url = f"postgresql://poststack:poststack_dev@localhost:{postgres_port}/poststack"
+            liquibase_health = lifecycle_manager.liquibase_runner.health_check_liquibase(database_url)
+            click.echo(f"   Liquibase: {'✅' if liquibase_health.passed else '❌'} {liquibase_health.message}")
+        
+    except Exception as e:
+        click.echo(f"❌ Health check failed: {e}", err=True)
         sys.exit(1)
 
 

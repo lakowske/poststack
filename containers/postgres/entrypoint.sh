@@ -76,6 +76,11 @@ EOSQL
 configure_postgresql() {
     log "Configuring PostgreSQL"
     
+    # Create log directory if it doesn't exist
+    mkdir -p /data/postgres/logs
+    chown postgres:postgres /data/postgres/logs
+    chmod 755 /data/postgres/logs
+    
     # Process configuration templates
     substitute_template "/data/postgres/config/postgresql.conf.template" "$PGDATA/postgresql.conf"
     substitute_template "/data/postgres/config/pg_hba.conf.template" "$PGDATA/pg_hba.conf"
@@ -171,6 +176,21 @@ main() {
         log "ERROR: PGDATA environment variable is required"
         exit 1
     fi
+    
+    # Set default values for template substitution
+    export POSTGRES_MAX_CONNECTIONS="${POSTGRES_MAX_CONNECTIONS:-100}"
+    export POSTGRES_SHARED_BUFFERS="${POSTGRES_SHARED_BUFFERS:-128MB}"
+    export POSTGRES_EFFECTIVE_CACHE_SIZE="${POSTGRES_EFFECTIVE_CACHE_SIZE:-1GB}"
+    export POSTGRES_LOG_MIN_DURATION="${POSTGRES_LOG_MIN_DURATION:-1000}"
+    export POSTGRES_SSL_MODE="${POSTGRES_SSL_MODE:-off}"
+    export POSTGRES_SSL_CERT_FILE="${POSTGRES_SSL_CERT_FILE:-}"
+    export POSTGRES_SSL_KEY_FILE="${POSTGRES_SSL_KEY_FILE:-}"
+    export POSTGRES_ARCHIVE_MODE="${POSTGRES_ARCHIVE_MODE:-off}"
+    export POSTGRES_ARCHIVE_COMMAND="${POSTGRES_ARCHIVE_COMMAND:-test ! -f /data/postgres/archive/%f && cp %p /data/postgres/archive/%f}"
+    export TZ="${TZ:-UTC}"
+    export POSTGRES_LOCAL_AUTH_METHOD="${POSTGRES_LOCAL_AUTH_METHOD:-trust}"
+    export POSTGRES_HOST_AUTH_METHOD="${POSTGRES_HOST_AUTH_METHOD:-trust}"
+    export POSTGRES_CONTAINER_AUTH_METHOD="${POSTGRES_CONTAINER_AUTH_METHOD:-trust}"
     
     # Initialize database if needed
     init_database

@@ -126,6 +126,11 @@ class RuntimeResult:
         return self.status == RuntimeStatus.RUNNING
 
     @property
+    def success(self) -> bool:
+        """Check if container operation was successful."""
+        return self.status in (RuntimeStatus.RUNNING, RuntimeStatus.STOPPED) and self.status != RuntimeStatus.FAILED
+
+    @property
     def uptime(self) -> Optional[float]:
         """Get container uptime in seconds."""
         if self.started_at:
