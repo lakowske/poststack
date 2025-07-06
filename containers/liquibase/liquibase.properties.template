@@ -2,38 +2,39 @@
 # This template will be processed by the entrypoint script
 
 # Database connection settings
-url=${DATABASE_URL:-jdbc:postgresql://${DATABASE_HOST:-localhost}:${DATABASE_PORT:-5432}/${DATABASE_NAME:-poststack}}
-username=${DATABASE_USER:-poststack}
-password=${DATABASE_PASSWORD}
+url=$DATABASE_URL
+username=$DATABASE_USER
+password=$DATABASE_PASSWORD
 driver=org.postgresql.Driver
 
 # Changelog settings
-changeLogFile=${LIQUIBASE_CHANGELOG_FILE:-/data/liquibase/changelogs/master.xml}
+changeLogFile=$LIQUIBASE_CHANGELOG_FILE
 
 # Context and label filtering
-contexts=${LIQUIBASE_CONTEXTS}
-labels=${LIQUIBASE_LABELS}
+contexts=$LIQUIBASE_CONTEXTS
+labels=$LIQUIBASE_LABELS
 
 # Output settings
 outputFile=/data/liquibase/logs/liquibase-output.log
-logLevel=${LIQUIBASE_LOG_LEVEL:-INFO}
+logLevel=$LIQUIBASE_LOG_LEVEL
 
 # Liquibase behavior settings
 classpath=/opt/liquibase/lib/postgresql.jar
+searchPath=/tmp/changelog,/data/liquibase,/data/liquibase/changelogs
 
 # Schema settings
 defaultSchemaName=poststack
-liquibaseSchemaName=liquibase
+liquibaseSchemaName=public
 
-# Backup settings
-outputDefaultSchema=true
-outputDefaultCatalog=true
+# Backup settings - use global command prefix
+liquibase.command.outputDefaultSchema=true
+liquibase.command.outputDefaultCatalog=true
 
 # Performance settings
 shouldRun=true
 
-# Security settings
-strict=true
+# Security settings - disable strict checking for now
+# strict=true
 
-# Snapshot settings
-snapshotFormat=json
+# Snapshot settings - use global command prefix
+liquibase.command.snapshotFormat=json

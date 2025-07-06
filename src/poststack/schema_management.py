@@ -177,7 +177,13 @@ class SchemaManager:
         temp_dir = Path(tempfile.mkdtemp(prefix="poststack_liquibase_"))
         changelog_path = temp_dir / "changelog.xml"
         
+        # Make directory readable by container user (permissions 755)
+        temp_dir.chmod(0o755)
+        
         changelog_path.write_text(changelog_content)
+        # Make file readable by container user (permissions 644)
+        changelog_path.chmod(0o644)
+        
         logger.info(f"Wrote changelog to {changelog_path}")
         
         return changelog_path

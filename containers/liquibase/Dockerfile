@@ -23,6 +23,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xmlstarlet \
     # JSON processing
     jq \
+    # Template processing (for envsubst)
+    gettext-base \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -33,6 +35,10 @@ RUN curl -L "https://github.com/liquibase/liquibase/releases/download/v${LIQUIBA
     tar -xzf liquibase.tar.gz -C /opt/liquibase && \
     rm liquibase.tar.gz && \
     chmod +x /opt/liquibase/liquibase
+
+# Download PostgreSQL JDBC driver
+RUN curl -L "https://jdbc.postgresql.org/download/postgresql-42.6.0.jar" \
+    -o /opt/liquibase/lib/postgresql.jar
 
 # Add liquibase to PATH
 ENV PATH="/opt/liquibase:$PATH"

@@ -380,7 +380,7 @@ class LiquibaseRunner(ContainerRunner):
         })
         
         # Start temporary container with Liquibase command
-        cmd_args = [command, "--verbose"] if command != "status" else [command]
+        cmd_args = [command]
         
         result = RuntimeResult(
             container_name=container_name,
@@ -398,6 +398,21 @@ class LiquibaseRunner(ContainerRunner):
                 "--name", container_name,
             ]
             
+            # Add volume mount for changelog file if needed
+            from pathlib import Path
+            changelog_path = Path(changelog_file)
+            if changelog_path.exists():
+                # Mount the directory containing the changelog
+                changelog_dir = changelog_path.parent
+                container_changelog_dir = "/tmp/changelog"
+                container_changelog_file = f"{container_changelog_dir}/{changelog_path.name}"
+                
+                run_cmd.extend(["-v", f"{changelog_dir}:{container_changelog_dir}:ro"])
+                
+                # Update the environment variable to point to the mounted location
+                env_vars["LIQUIBASE_CHANGELOG_FILE"] = "changelog.xml"
+                logger.debug(f"Mounting changelog: {changelog_dir} -> {container_changelog_dir}")
+            
             # Add environment variables
             for env_name, env_value in env_vars.items():
                 run_cmd.extend(["-e", f"{env_name}={env_value}"])
@@ -406,7 +421,10 @@ class LiquibaseRunner(ContainerRunner):
             run_cmd.append(image_name)
             run_cmd.extend(cmd_args)
             
-            logger.debug(f"Liquibase command: {' '.join(run_cmd)}")
+            logger.info(f"Liquibase command: {' '.join(run_cmd)}")
+            logger.debug(f"Changelog file exists: {changelog_path.exists()}")
+            if changelog_path.exists():
+                logger.debug(f"Changelog size: {changelog_path.stat().st_size} bytes")
             
             # Execute command
             start_time = time.time()
@@ -572,13 +590,43 @@ class LiquibaseRunner(ContainerRunner):
             else:
                 host, port = host_port, "5432"
                 
+            # For container-to-host communication, replace localhost with host IP
+            if host in ["localhost", "127.0.0.1"]:
+                import subprocess
+                try:
+                    # Get host IP for container networking
+                    result = subprocess.run(
+                        ["ip", "route", "get", "1.1.1.1"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    if result.returncode == 0:
+                        for part in result.stdout.split():
+                            if part.startswith("src"):
+                                continue
+                            # Look for IP after 'src'
+                            parts = result.stdout.split()
+                            if "src" in parts:
+                                src_index = parts.index("src")
+                                if src_index + 1 < len(parts):
+                                    host_ip = parts[src_index + 1]
+                                    logger.info(f"Using host IP {host_ip} for container connectivity")
+                                    host = host_ip
+                                    break
+                except Exception as e:
+                    logger.warning(f"Could not determine host IP, using localhost: {e}")
+                
+            # Convert to JDBC URL format for Liquibase
+            jdbc_url = f"jdbc:postgresql://{host}:{port}/{database}"
+            
             return {
                 "DATABASE_HOST": host,
                 "DATABASE_PORT": port,
                 "DATABASE_NAME": database,
                 "DATABASE_USER": user,
                 "DATABASE_PASSWORD": password,
-                "DATABASE_URL": database_url,
+                "DATABASE_URL": jdbc_url,
             }
             
         except Exception as e:

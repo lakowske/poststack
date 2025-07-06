@@ -286,25 +286,68 @@ poststack/
 - Implement full bootstrap workflow
 - Add comprehensive end-to-end testing
 - Create production-ready CLI tool
+- **Add resource cleanup and environment reset capabilities**
 
 ### Core Functions
 - CLI commands use same functions as tests
 - Full setup workflow (build + verify + schema)
 - Progress reporting and user feedback
 - Comprehensive error handling and recovery
+- **Complete resource cleanup for reproducible testing**
+
+### Resource Management (New)
+
+Add missing cleanup functionality to enable reliable end-to-end testing and environment reproduction:
+
+```bash
+# Volume management
+poststack volumes list              # List all poststack-related volumes
+poststack volumes cleanup           # Remove unused poststack volumes
+poststack volumes prune             # Remove all orphaned volumes
+
+# Enhanced cleanup
+poststack cleanup --all             # Full cleanup of containers, volumes, temp files
+poststack cleanup --temp-files      # Clean temporary files (like /tmp/poststack_*)
+poststack cleanup --containers      # Stop and remove all poststack containers
+poststack cleanup --images          # Remove built poststack images
+
+# Database-specific cleanup
+poststack database cleanup-volumes  # Remove database volumes
+poststack database reset            # Full database reset with volume cleanup
+
+# Complete environment reset
+poststack reset --confirm           # Full environment reset for clean slate testing
+```
 
 ### Testing Criteria
+
 - [ ] CLI build-images command works end-to-end
 - [ ] CLI verify-db command validates connectivity
 - [ ] CLI init-schema and update-schema work
 - [ ] CLI setup command completes full workflow
 - [ ] All error conditions are handled properly
+- [ ] **Cleanup commands remove all test artifacts**
+- [ ] **Environment reset enables reproducible test runs**
+- [ ] **Volume management prevents storage accumulation**
+- [ ] **Temporary file cleanup works across all operations**
+
+### End-to-End Testing Requirements
+
+- [ ] **Full environment setup from clean slate**
+- [ ] **Complete workflow: build → start → schema → verify → cleanup**
+- [ ] **Multiple test runs without interference**
+- [ ] **Resource monitoring to prevent accumulation**
+- [ ] **Automated cleanup in CI/CD pipelines**
 
 ### Success Metrics
+
 - CLI tool successfully bootstraps complete environment
 - Same code paths used in testing and CLI
 - Error handling provides actionable guidance
 - Performance meets user expectations
+- **Environment can be reliably reset to clean state**
+- **No resource leaks between test runs**
+- **Reproducible results across multiple executions**
 
 ---
 
