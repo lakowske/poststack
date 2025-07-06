@@ -81,9 +81,9 @@ def setup_logging(
 
     # Get poststack logger
     logger = logging.getLogger("poststack")
-    logger.info(f"Logging initialized - Level: {logging.getLevelName(level)}")
+    logger.debug(f"Logging initialized - Level: {logging.getLevelName(level)}")
     if enable_file_logging:
-        logger.info(f"Log directory: {log_path.absolute()}")
+        logger.debug(f"Log directory: {log_path.absolute()}")
 
     return logger
 

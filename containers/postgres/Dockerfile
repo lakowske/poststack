@@ -40,11 +40,11 @@ RUN /data/.venv/bin/pip install --no-cache-dir \
     pg_activity
 
 # Copy configuration templates
-COPY postgresql.conf.template /data/postgres/config/
-COPY pg_hba.conf.template /data/postgres/config/
+COPY containers/postgres/postgresql.conf.template /data/postgres/config/
+COPY containers/postgres/pg_hba.conf.template /data/postgres/config/
 
 # Copy entrypoint script
-COPY entrypoint.sh /usr/local/bin/
+COPY containers/postgres/entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # PostgreSQL specific environment variables

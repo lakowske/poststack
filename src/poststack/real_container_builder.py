@@ -48,6 +48,7 @@ class RealContainerBuilder(ContainerBuilder):
         result = self.build_image(
             image_name=image_name,
             dockerfile_path=dockerfile_path,
+            context_path=Path("."),  # Use project root as context
             tags=["poststack/base-debian:latest", "poststack/base-debian:1.0.0"],
             no_cache=False,  # Use cache for base image
             timeout=900,  # Longer timeout for base image
@@ -83,6 +84,7 @@ class RealContainerBuilder(ContainerBuilder):
         result = self.build_image(
             image_name=image_name,
             dockerfile_path=dockerfile_path,
+            context_path=Path("."),  # Use project root as context
             tags=["poststack/postgres:latest", "poststack/postgres:15"],
             build_args={
                 "POSTGRES_VERSION": "15",
@@ -120,6 +122,7 @@ class RealContainerBuilder(ContainerBuilder):
         result = self.build_image(
             image_name=image_name,
             dockerfile_path=dockerfile_path,
+            context_path=Path("."),  # Use project root as context
             tags=["poststack/liquibase:latest", "poststack/liquibase:4.24.0"],
             build_args={
                 "LIQUIBASE_VERSION": "4.24.0",

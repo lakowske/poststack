@@ -50,12 +50,12 @@ RUN mkdir -p /data/liquibase/changelogs /data/liquibase/scripts /data/liquibase/
     chown -R certuser:certgroup /data/liquibase
 
 # Copy Liquibase configuration templates and scripts
-COPY liquibase.properties.template /data/liquibase/
-COPY entrypoint.sh /usr/local/bin/
+COPY containers/liquibase/liquibase.properties.template /data/liquibase/
+COPY containers/liquibase/entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Copy sample changelog files
-COPY changelogs/ /data/liquibase/changelogs/
+COPY containers/liquibase/changelogs/ /data/liquibase/changelogs/
 
 # Environment variables for Liquibase
 ENV LIQUIBASE_HOME=/opt/liquibase
