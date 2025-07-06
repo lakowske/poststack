@@ -210,47 +210,7 @@ containers/
 
 ---
 
-## Phase 5: Database Integration
-
-### Goals
-- Implement database connectivity and verification using built containers
-- Add Liquibase schema management using Liquibase container
-- Create database configuration management
-- Test database operations with containerized PostgreSQL
-
-### Deliverables
-```
-poststack/
-├── database.py           # Database operations
-├── schema.py            # Schema management with Liquibase
-└── tests/
-    ├── test_database.py  # Database connectivity tests
-    ├── test_schema.py    # Schema management tests
-    └── docker-compose.test.yml # Test database setup
-```
-
-### Core Functions
-- Database URL parsing and validation
-- Connection testing and health checks
-- Liquibase container integration (uses Phase 4 built images)
-- Schema initialization and updates
-
-### Testing Criteria
-- [ ] Database connectivity verification works with containerized PostgreSQL
-- [ ] Liquibase operations complete successfully using built container
-- [ ] Schema initialization creates expected tables
-- [ ] Schema updates apply changes correctly
-- [ ] Error handling covers connection failures
-
-### Success Metrics
-- Database operations work with containerized PostgreSQL instance
-- Liquibase integration handles schema versioning using built container
-- Connection errors provide clear diagnostic information
-- Database state is properly managed and cleaned up
-
----
-
-## Phase 6: Container Runtime Verification
+## Phase 5: Container Runtime Verification
 
 ### Goals
 - Implement container runtime testing
@@ -276,6 +236,46 @@ poststack/
 - Health checks complete within expected timeouts
 - No resource leaks or leftover containers
 - Runtime performance meets expectations
+
+---
+
+## Phase 6: Database Integration
+
+### Goals
+- Implement database connectivity and verification using running containers
+- Add Liquibase schema management using Liquibase container
+- Create database configuration management
+- Test database operations with containerized PostgreSQL (requires Phase 5 runtime capabilities)
+
+### Deliverables
+```
+poststack/
+├── database.py           # Database operations
+├── schema.py            # Schema management with Liquibase
+└── tests/
+    ├── test_database.py  # Database connectivity tests
+    ├── test_schema.py    # Schema management tests
+    └── docker-compose.test.yml # Test database setup
+```
+
+### Core Functions
+- Database URL parsing and validation
+- Connection testing and health checks
+- Liquibase container integration (uses Phase 4 built images + Phase 5 runtime)
+- Schema initialization and updates
+
+### Testing Criteria
+- [ ] Database connectivity verification works with running PostgreSQL container
+- [ ] Liquibase operations complete successfully using running container
+- [ ] Schema initialization creates expected tables
+- [ ] Schema updates apply changes correctly
+- [ ] Error handling covers connection failures
+
+### Success Metrics
+- Database operations work with running PostgreSQL instance
+- Liquibase integration handles schema versioning using running container
+- Connection errors provide clear diagnostic information
+- Database state is properly managed and cleaned up
 
 ---
 
