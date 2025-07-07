@@ -333,6 +333,167 @@ class PostgreSQLRunner(ContainerRunner):
                 return result == 0
         except Exception:
             return False
+    
+    def get_running_postgres_containers(self) -> List[Dict[str, str]]:
+        """Get list of running PostgreSQL containers with their connection details."""
+        try:
+            # List all running containers
+            cmd = [self.container_runtime, "ps", "--format", "json"]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            
+            if result.returncode != 0:
+                logger.warning(f"Failed to list containers: {result.stderr}")
+                return []
+            
+            import json
+            containers_data = result.stdout.strip()
+            if not containers_data:
+                return []
+            
+            # Parse JSON output (podman returns a JSON array)
+            try:
+                containers = json.loads(containers_data)
+                if not isinstance(containers, list):
+                    containers = [containers]
+            except json.JSONDecodeError:
+                logger.warning(f"Failed to parse container JSON: {containers_data}")
+                return []
+            
+            postgres_containers = []
+            for container in containers:
+                # Look for poststack PostgreSQL containers
+                names = container.get('Names', [])
+                image = container.get('Image', '')
+                
+                # Check if this looks like a poststack postgres container
+                is_postgres = (
+                    any('postgres' in name.lower() for name in names) or
+                    'postgres' in image.lower()
+                )
+                
+                is_poststack = (
+                    any('poststack' in name.lower() for name in names) or
+                    'poststack' in image.lower()
+                )
+                
+                if is_postgres and (is_poststack or any('poststack-postgres' in name for name in names)):
+                    # Extract connection details
+                    container_details = self._extract_postgres_connection_info(container)
+                    if container_details:
+                        postgres_containers.append(container_details)
+            
+            logger.info(f"Found {len(postgres_containers)} running PostgreSQL containers")
+            return postgres_containers
+            
+        except Exception as e:
+            logger.error(f"Failed to get running PostgreSQL containers: {e}")
+            return []
+    
+    def _extract_postgres_connection_info(self, container_info: Dict) -> Optional[Dict[str, str]]:
+        """Extract PostgreSQL connection information from container info."""
+        try:
+            names = container_info.get('Names', [])
+            container_name = names[0] if names else container_info.get('Id', '')[:12]
+            
+            # Get port mappings
+            ports = container_info.get('Ports', [])
+            postgres_port = None
+            
+            for port_info in ports:
+                if isinstance(port_info, dict):
+                    # Look for PostgreSQL port (5432)
+                    if port_info.get('container_port') == 5432:
+                        postgres_port = port_info.get('host_port')
+                        break
+                    # Also check for PrivatePort/PublicPort format (docker compatibility)
+                    elif port_info.get('PrivatePort') == 5432:
+                        postgres_port = port_info.get('PublicPort')
+                        break
+                elif isinstance(port_info, str):
+                    # Parse string format "0.0.0.0:5434->5432/tcp"
+                    if '5432' in port_info:
+                        parts = port_info.split(':')
+                        if len(parts) >= 2:
+                            port_part = parts[1].split('->')[0]
+                            try:
+                                postgres_port = int(port_part)
+                            except ValueError:
+                                continue
+            
+            if not postgres_port:
+                logger.warning(f"Could not determine port for container {container_name}")
+                return None
+            
+            # Try to get environment variables from the container
+            env_info = self._get_container_environment(container_name)
+            
+            database_name = env_info.get('POSTGRES_DB', 'poststack')
+            username = env_info.get('POSTGRES_USER', 'poststack')
+            password = env_info.get('POSTGRES_PASSWORD', 'poststack_dev')
+            
+            # Build database URL
+            database_url = f"postgresql://{username}:{password}@localhost:{postgres_port}/{database_name}"
+            
+            return {
+                'container_name': container_name,
+                'host': 'localhost',
+                'port': str(postgres_port),
+                'database': database_name,
+                'username': username,
+                'password': password,
+                'database_url': database_url
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to extract connection info: {e}")
+            return None
+    
+    def _get_container_environment(self, container_name: str) -> Dict[str, str]:
+        """Get environment variables from a running container."""
+        try:
+            cmd = [self.container_runtime, "inspect", container_name, "--format", "{{json .Config.Env}}"]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            
+            if result.returncode != 0:
+                logger.warning(f"Could not inspect container {container_name}: {result.stderr}")
+                return {}
+            
+            import json
+            env_list = json.loads(result.stdout.strip())
+            
+            # Convert list of "KEY=value" strings to dict
+            env_dict = {}
+            for env_var in env_list:
+                if '=' in env_var:
+                    key, value = env_var.split('=', 1)
+                    env_dict[key] = value
+            
+            return env_dict
+            
+        except Exception as e:
+            logger.warning(f"Failed to get environment for {container_name}: {e}")
+            return {}
+    
+    def get_primary_postgres_url(self) -> Optional[str]:
+        """Get database URL for the primary PostgreSQL container."""
+        containers = self.get_running_postgres_containers()
+        
+        if not containers:
+            return None
+        
+        # Prefer containers with 'poststack-postgres' in the name
+        for container in containers:
+            if 'poststack-postgres' in container['container_name']:
+                logger.info(f"Using primary PostgreSQL container: {container['container_name']}")
+                return container['database_url']
+        
+        # Fallback to first available container
+        if containers:
+            container = containers[0]
+            logger.info(f"Using PostgreSQL container: {container['container_name']}")
+            return container['database_url']
+        
+        return None
 
 
 class LiquibaseRunner(ContainerRunner):

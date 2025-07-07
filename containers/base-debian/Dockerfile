@@ -33,6 +33,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     less \
     # Certificate and crypto tools
     openssl \
+    # JSON processing
+    jq \
+    # Template processing (for envsubst)
+    gettext-base \
     # Build tools (may be needed for some Python packages)
     gcc \
     libc6-dev \

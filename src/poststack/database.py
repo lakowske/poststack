@@ -12,6 +12,8 @@ from typing import Optional
 import click
 
 from .config import PoststackConfig
+from .schema_management import SchemaManager
+from .database_operations import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
@@ -48,11 +50,12 @@ def test_connection(ctx: click.Context, timeout: int) -> None:
 
         import psycopg2
 
-        masked_url = re.sub(r"://([^:]+):([^@]+)@", r"://\1:***@", config.database_url)
+        effective_url = config.effective_database_url
+        masked_url = re.sub(r"://([^:]+):([^@]+)@", r"://\1:***@", effective_url)
         click.echo(f"Connecting to: {masked_url}")
 
         # Test connection
-        conn = psycopg2.connect(config.database_url, connect_timeout=timeout)
+        conn = psycopg2.connect(effective_url, connect_timeout=timeout)
         cursor = conn.cursor()
 
         # Get database info
@@ -95,14 +98,14 @@ def test_connection(ctx: click.Context, timeout: int) -> None:
 )
 @click.pass_context
 def create_schema(ctx: click.Context, force: bool) -> None:
-    """Create the Poststack database schema."""
+    """Create the Poststack database schema using Liquibase."""
     config: PoststackConfig = ctx.obj["config"]
 
     if not config.is_database_configured:
         click.echo("❌ Database not configured.", err=True)
         sys.exit(1)
 
-    click.echo("🏗️  Creating Poststack database schema...")
+    click.echo("🏗️  Creating Poststack database schema using Liquibase...")
 
     if force:
         click.echo("⚠️  Force mode enabled - existing schema will be destroyed!")
@@ -111,127 +114,84 @@ def create_schema(ctx: click.Context, force: bool) -> None:
             return
 
     try:
-        import psycopg2
-
-        conn = psycopg2.connect(config.database_url)
-        cursor = conn.cursor()
-
-        # Check if schema exists
-        cursor.execute("""
-            SELECT EXISTS (
-                SELECT 1 FROM information_schema.schemata 
-                WHERE schema_name = 'poststack'
-            );
-        """)
-        schema_exists = cursor.fetchone()[0]
-
-        if schema_exists and not force:
-            click.echo(
-                "❌ Poststack schema already exists. Use --force to recreate it.",
-                err=True,
-            )
+        # Initialize managers
+        schema_manager = SchemaManager(config)
+        db_manager = DatabaseManager(config)
+        
+        # Test database connection first
+        effective_url = config.effective_database_url
+        connection_result = db_manager.test_connection(effective_url)
+        if not connection_result.passed:
+            click.echo(f"❌ Database connection failed: {connection_result.message}", err=True)
+            sys.exit(1)
+        
+        # Handle force mode - drop existing schema and Liquibase tracking
+        if force:
+            try:
+                import psycopg2
+                conn = psycopg2.connect(effective_url)
+                cursor = conn.cursor()
+                
+                # Check if schema exists
+                cursor.execute(
+                    "SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname = 'poststack');"
+                )
+                schema_exists = cursor.fetchone()[0]
+                
+                if schema_exists:
+                    cursor.execute("DROP SCHEMA poststack CASCADE;")
+                    click.echo("🗑️  Dropped existing schema")
+                    
+                # Always drop Liquibase tracking tables in force mode to ensure clean state
+                cursor.execute("DROP TABLE IF EXISTS public.databasechangelog CASCADE;")
+                cursor.execute("DROP TABLE IF EXISTS public.databasechangeloglock CASCADE;")
+                click.echo("🗑️  Dropped Liquibase tracking tables")
+                    
+                conn.commit()
+                cursor.close()
+                conn.close()
+            except Exception as e:
+                logger.warning(f"Failed to drop existing schema: {e}")
+        
+        # Create schema first (Liquibase workaround)
+        try:
+            import psycopg2
+            conn = psycopg2.connect(effective_url)
+            cursor = conn.cursor()
+            cursor.execute("CREATE SCHEMA IF NOT EXISTS poststack;")
+            conn.commit()
             cursor.close()
             conn.close()
+            click.echo("✅ Created poststack schema")
+        except Exception as e:
+            logger.warning(f"Schema creation preparation: {e}")
+        
+        # Initialize schema using Liquibase
+        result = schema_manager.initialize_schema(effective_url)
+        
+        if result.success:
+            click.echo("\n🎉 Database schema created successfully using Liquibase!")
+            
+            # Show what was created
+            verification = schema_manager.verify_schema(effective_url)
+            if verification.passed:
+                click.echo(f"   Schema Version: {verification.details.get('schema_version', 'unknown')}")
+                tables = verification.details.get('tables', [])
+                if tables:
+                    click.echo(f"   Tables Created: {', '.join(tables)}")
+        else:
+            click.echo(f"❌ Schema creation failed: {result.logs}", err=True)
             sys.exit(1)
 
-        if force and schema_exists:
-            cursor.execute("DROP SCHEMA poststack CASCADE;")
-            click.echo("🗑️  Dropped existing schema")
-
-        # Create schema
-        cursor.execute("CREATE SCHEMA IF NOT EXISTS poststack;")
-        click.echo("✅ Created poststack schema")
-
-        # Create core tables
-        cursor.execute("""
-            CREATE TABLE poststack.system_info (
-                id SERIAL PRIMARY KEY,
-                key VARCHAR(255) UNIQUE NOT NULL,
-                value TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        click.echo("✅ Created system_info table")
-
-        cursor.execute("""
-            CREATE TABLE poststack.services (
-                id SERIAL PRIMARY KEY,
-                name VARCHAR(255) UNIQUE NOT NULL,
-                type VARCHAR(100) NOT NULL,
-                status VARCHAR(50) DEFAULT 'stopped',
-                config JSONB,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        click.echo("✅ Created services table")
-
-        cursor.execute("""
-            CREATE TABLE poststack.containers (
-                id SERIAL PRIMARY KEY,
-                service_id INTEGER REFERENCES poststack.services(id) ON DELETE CASCADE,
-                container_id VARCHAR(255) UNIQUE,
-                image VARCHAR(255) NOT NULL,
-                status VARCHAR(50) DEFAULT 'created',
-                config JSONB,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        click.echo("✅ Created containers table")
-
-        cursor.execute("""
-            CREATE TABLE poststack.certificates (
-                id SERIAL PRIMARY KEY,
-                domain VARCHAR(255) UNIQUE NOT NULL,
-                status VARCHAR(50) DEFAULT 'pending',
-                cert_path TEXT,
-                key_path TEXT,
-                expires_at TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        click.echo("✅ Created certificates table")
-
-        # Insert initial system info
-        cursor.execute("""
-            INSERT INTO poststack.system_info (key, value) 
-            VALUES 
-                ('schema_version', '1.0.0'),
-                ('created_by', 'poststack-cli'),
-                ('poststack_version', '0.1.0')
-            ON CONFLICT (key) DO UPDATE SET 
-                value = EXCLUDED.value,
-                updated_at = CURRENT_TIMESTAMP;
-        """)
-        click.echo("✅ Inserted system information")
-
-        # Create indexes
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_services_type ON poststack.services(type);"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_services_status ON poststack.services(status);"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_containers_status ON poststack.containers(status);"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_certificates_domain ON poststack.certificates(domain);"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_certificates_expires_at ON poststack.certificates(expires_at);"
-        )
-        click.echo("✅ Created indexes")
-
-        conn.commit()
-        cursor.close()
-        conn.close()
-
-        click.echo("\n🎉 Database schema created successfully!")
-
+    except ImportError as e:
+        if "psycopg2" in str(e):
+            click.echo(
+                "❌ psycopg2 not available. Install with: pip install psycopg2-binary",
+                err=True,
+            )
+        else:
+            click.echo(f"❌ Import error: {e}", err=True)
+        sys.exit(1)
     except Exception as e:
         click.echo(f"❌ Schema creation failed: {e}", err=True)
         sys.exit(1)
@@ -250,7 +210,8 @@ def show_schema(ctx: click.Context) -> None:
     try:
         import psycopg2
 
-        conn = psycopg2.connect(config.database_url)
+        effective_url = config.effective_database_url
+        conn = psycopg2.connect(effective_url)
         cursor = conn.cursor()
 
         click.echo("📊 Poststack Database Schema")
@@ -338,7 +299,8 @@ def drop_schema(ctx: click.Context, confirm: bool) -> None:
     try:
         import psycopg2
 
-        conn = psycopg2.connect(config.database_url)
+        effective_url = config.effective_database_url
+        conn = psycopg2.connect(effective_url)
         cursor = conn.cursor()
 
         # Check if schema exists
@@ -357,6 +319,11 @@ def drop_schema(ctx: click.Context, confirm: bool) -> None:
             return
 
         cursor.execute("DROP SCHEMA poststack CASCADE;")
+        
+        # Also drop Liquibase tracking tables to ensure clean state
+        cursor.execute("DROP TABLE IF EXISTS public.databasechangelog CASCADE;")
+        cursor.execute("DROP TABLE IF EXISTS public.databasechangeloglock CASCADE;")
+        
         conn.commit()
 
         click.echo("🗑️  Poststack schema dropped successfully")
@@ -372,75 +339,48 @@ def drop_schema(ctx: click.Context, confirm: bool) -> None:
 @database.command()
 @click.pass_context
 def migrate(ctx: click.Context) -> None:
-    """Run database migrations to latest version."""
+    """Run database migrations to latest version using Liquibase."""
     config: PoststackConfig = ctx.obj["config"]
 
     if not config.is_database_configured:
         click.echo("❌ Database not configured.", err=True)
         sys.exit(1)
 
-    click.echo("🔄 Running database migrations...")
+    click.echo("🔄 Running database migrations using Liquibase...")
 
     try:
-        import psycopg2
-
-        conn = psycopg2.connect(config.database_url)
-        cursor = conn.cursor()
-
-        # Check if schema exists
-        cursor.execute("""
-            SELECT EXISTS (
-                SELECT 1 FROM information_schema.schemata 
-                WHERE schema_name = 'poststack'
-            );
-        """)
-        schema_exists = cursor.fetchone()[0]
-
-        if not schema_exists:
-            click.echo("❌ Poststack schema does not exist")
-            click.echo("Run 'poststack database create-schema' first")
-            cursor.close()
-            conn.close()
+        # Initialize managers
+        schema_manager = SchemaManager(config)
+        db_manager = DatabaseManager(config)
+        
+        # Test database connection first
+        effective_url = config.effective_database_url
+        connection_result = db_manager.test_connection(effective_url)
+        if not connection_result.passed:
+            click.echo(f"❌ Database connection failed: {connection_result.message}", err=True)
             sys.exit(1)
-
-        # Get current schema version
-        current_version = "0.0.0"
-        try:
-            cursor.execute("""
-                SELECT value FROM poststack.system_info 
-                WHERE key = 'schema_version';
-            """)
-            result = cursor.fetchone()
-            if result:
-                current_version = result[0]
-        except:
-            pass  # Table might not exist
-
-        click.echo(f"Current schema version: {current_version}")
-
-        # For Phase 2, we'll just update the version to 1.0.0
-        target_version = "1.0.0"
-
-        if current_version == target_version:
-            click.echo("✅ Database is already up to date")
+        
+        # Get current schema status
+        status = schema_manager.get_schema_status(effective_url)
+        
+        if not status['verification']['passed']:
+            click.echo("❌ Poststack schema does not exist or is incomplete")
+            click.echo("Run 'poststack database create-schema' first")
+            sys.exit(1)
+        
+        # Run Liquibase update to apply any pending migrations
+        result = schema_manager.update_schema(effective_url)
+        
+        if result.success:
+            click.echo("✅ Database migrations completed successfully!")
+            
+            # Show updated status
+            verification = schema_manager.verify_schema(effective_url)
+            if verification.passed:
+                click.echo(f"   Schema Version: {verification.details.get('schema_version', 'unknown')}")
         else:
-            # Update version
-            cursor.execute(
-                """
-                INSERT INTO poststack.system_info (key, value) 
-                VALUES ('schema_version', %s)
-                ON CONFLICT (key) DO UPDATE SET 
-                    value = EXCLUDED.value,
-                    updated_at = CURRENT_TIMESTAMP;
-            """,
-                (target_version,),
-            )
-
-            conn.commit()
-            click.echo(f"✅ Migrated from {current_version} to {target_version}")
-
-        cursor.close()
-        conn.close()
+            click.echo(f"❌ Migration failed: {result.logs}", err=True)
+            sys.exit(1)
 
     except Exception as e:
         click.echo(f"❌ Migration failed: {e}", err=True)
@@ -481,7 +421,8 @@ def backup(ctx: click.Context, table: Optional[str], output: Optional[str]) -> N
         import urllib.parse
 
         # Parse database URL
-        parsed = urllib.parse.urlparse(config.database_url)
+        effective_url = config.effective_database_url
+        parsed = urllib.parse.urlparse(effective_url)
 
         # Build pg_dump command
         cmd = [

@@ -43,9 +43,10 @@ class SchemaManager:
                    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.3.xsd">
 
     <!-- Poststack Core Schema -->
-    <changeSet id="1" author="poststack">
+    <changeSet id="1" author="poststack" runOnChange="true">
         <comment>Create poststack schema</comment>
         <sql>CREATE SCHEMA IF NOT EXISTS poststack;</sql>
+        <rollback>DROP SCHEMA IF EXISTS poststack CASCADE;</rollback>
     </changeSet>
 
     <!-- System Information Table -->

@@ -6,11 +6,14 @@ and command-line arguments using Pydantic settings.
 """
 
 import os
+import logging
 from pathlib import Path
 from typing import Optional
 
 from pydantic import Field, validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 
 class PoststackConfig(BaseSettings):
@@ -136,13 +139,41 @@ class PoststackConfig(BaseSettings):
 
     @property
     def is_database_configured(self) -> bool:
-        """Check if database is configured."""
-        return self.database_url is not None
+        """Check if database is configured (explicitly or auto-detected)."""
+        return self.database_url is not None or self.get_auto_detected_database_url() is not None
 
     @property
     def is_domain_configured(self) -> bool:
         """Check if domain is configured."""
         return self.domain_name is not None and self.le_email is not None
+    
+    def get_auto_detected_database_url(self) -> Optional[str]:
+        """Auto-detect database URL from running PostgreSQL containers."""
+        try:
+            # Import here to avoid circular imports
+            from .container_runtime import PostgreSQLRunner
+            
+            postgres_runner = PostgreSQLRunner(self)
+            auto_url = postgres_runner.get_primary_postgres_url()
+            
+            if auto_url:
+                logger.info(f"Auto-detected PostgreSQL container: {auto_url.split('@')[1] if '@' in auto_url else auto_url}")
+                return auto_url
+            else:
+                logger.debug("No running PostgreSQL containers found for auto-detection")
+                return None
+                
+        except Exception as e:
+            logger.debug(f"Failed to auto-detect database URL: {e}")
+            return None
+    
+    @property
+    def effective_database_url(self) -> Optional[str]:
+        """Get the effective database URL (explicit or auto-detected)."""
+        if self.database_url:
+            return self.database_url
+        
+        return self.get_auto_detected_database_url()
 
     def get_log_dir_path(self) -> Path:
         """Get log directory as Path object."""

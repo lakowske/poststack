@@ -21,10 +21,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     sqlite3 \
     # XML processing tools (for Liquibase changesets)
     xmlstarlet \
-    # JSON processing
-    jq \
-    # Template processing (for envsubst)
-    gettext-base \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 

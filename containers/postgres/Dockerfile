@@ -22,8 +22,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-15-pg-stat-kcache \
     # Development and debugging
     postgresql-server-dev-15 \
-    # Template processing (for envsubst)
-    gettext-base \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
