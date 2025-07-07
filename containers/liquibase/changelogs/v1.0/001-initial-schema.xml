@@ -121,4 +121,54 @@
         </rollback>
     </changeSet>
 
+    <changeSet id="006-create-users-table" author="poststack">
+        <createTable schemaName="poststack" tableName="users">
+            <column name="id" type="serial" autoIncrement="true">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="username" type="varchar(100)">
+                <constraints nullable="false" unique="true"/>
+            </column>
+            <column name="email" type="varchar(255)">
+                <constraints nullable="false" unique="true"/>
+            </column>
+            <column name="email_verified" type="boolean" defaultValue="false">
+                <constraints nullable="false"/>
+            </column>
+            <column name="password_hash" type="varchar(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="hash_algorithm" type="varchar(50)" defaultValue="SHA512-CRYPT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="active" type="boolean" defaultValue="true">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="timestamp" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="timestamp" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+            <column name="last_login_at" type="timestamp"/>
+            <column name="failed_login_attempts" type="integer" defaultValue="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="locked_until" type="timestamp"/>
+            <column name="password_expires_at" type="timestamp"/>
+            <column name="password_reset_token" type="varchar(255)">
+                <constraints unique="true"/>
+            </column>
+            <column name="password_reset_expires_at" type="timestamp"/>
+            <column name="two_factor_enabled" type="boolean" defaultValue="false">
+                <constraints nullable="false"/>
+            </column>
+            <column name="two_factor_secret" type="varchar(255)"/>
+            <column name="metadata" type="jsonb"/>
+        </createTable>
+        <rollback>
+            <dropTable schemaName="poststack" tableName="users"/>
+        </rollback>
+    </changeSet>
+
 </databaseChangeLog>

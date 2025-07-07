@@ -279,10 +279,134 @@ poststack/
 
 ---
 
-## Phase 7: CLI Integration and End-to-End Testing
+## Phase 7: User Management
 
 ### Goals
-- Connect CLI commands to library functions
+- Implement comprehensive user management system for Apache and mail authentication
+- Create reusable user operations module for CLI and future web interface
+- Add CLI commands for user CRUD operations
+- Integrate with database schema established in Phase 6
+- Build foundation for service authentication integration
+
+### Architecture Integration
+This phase leverages the users table and database infrastructure from Phase 6, creating a management layer that will support:
+- Apache `.htaccess` authentication
+- Dovecot/Postfix mail server authentication  
+- Future web-based administration interface
+- Audit logging and security controls
+
+### Deliverables
+```
+poststack/
+├── user_management.py         # Core user operations module
+├── cli.py                    # Extended with user commands
+└── tests/
+    ├── test_user_management.py  # User operations tests
+    └── test_user_cli.py         # User CLI tests
+```
+
+### Core User Operations Module
+
+#### UserManager Class
+- Database operations wrapper using established database connections
+- User CRUD operations with proper error handling
+- Password hash management (SHA512-CRYPT for Apache/mail compatibility)
+- Security operations: account locking, password resets, email verification
+- Validation: username/email format validation with security checks
+
+#### User Model
+```python
+@dataclass
+class User:
+    id: int
+    username: str
+    email: str
+    email_verified: bool
+    active: bool
+    created_at: datetime
+    updated_at: datetime
+    last_login_at: Optional[datetime]
+    # Security fields handled internally
+```
+
+#### Security Features
+- SHA512-CRYPT password hashing (compatible with Apache htpasswd and Dovecot)
+- Account locking after failed login attempts
+- Password expiration and reset token management
+- Input validation and SQL injection prevention
+- Audit logging for all user operations
+
+### CLI Commands
+```bash
+# User creation and management
+poststack user create <username> <email> [--password] [--active/--inactive] [--verified/--unverified]
+poststack user list [--active-only] [--format json|table]
+poststack user show <username>
+poststack user update <username> [--email <email>] [--active/--inactive] [--verified/--unverified]
+poststack user delete <username> [--force]
+
+# Security operations  
+poststack user reset-password <username> [--generate] [--force-change]
+poststack user unlock <username>
+poststack user change-password <username>
+
+# Bulk operations
+poststack user import --file <csv-file> [--validate-only]
+poststack user export [--format csv|json] [--active-only]
+```
+
+### Database Schema Integration
+Utilizes the users table created in Phase 6:
+- ✅ Users table with comprehensive authentication fields
+- ✅ Performance indexes for user lookups
+- ✅ Security features (locking, password expiration, 2FA preparation)
+- ✅ Default admin user for bootstrapping
+
+### Reusability Design
+Module designed for future web interface integration:
+- **Business Logic Separation**: Core operations independent of CLI interface
+- **Standardized Returns**: Consistent result objects and exception handling
+- **Database Abstraction**: Uses established database connection patterns
+- **Audit Hooks**: Extensible logging for compliance and security monitoring
+- **API-Ready**: Methods designed for REST API consumption
+
+### Password Security
+- **Hash Format**: SHA512-CRYPT with configurable rounds (default: 5000)
+- **Compatibility**: Works with Apache htpasswd and Dovecot authentication
+- **Generation**: Secure random password generation with customizable policies
+- **Validation**: Password strength checking and common password prevention
+
+### Testing Criteria
+- [ ] UserManager class handles all CRUD operations correctly
+- [ ] Password hashing/verification works with SHA512-CRYPT format
+- [ ] All CLI commands parse arguments and execute operations
+- [ ] Security features (locking, password reset) function properly
+- [ ] Input validation prevents injection attacks and invalid data
+- [ ] Error handling provides clear, actionable messages
+- [ ] Database operations use transactions and handle failures gracefully
+- [ ] Module can be imported and used independently of CLI
+
+### Integration Testing
+- [ ] User operations work with running PostgreSQL container (Phase 5/6 integration)
+- [ ] CLI commands integrate with existing database commands
+- [ ] Password hashes are compatible with Apache htpasswd format
+- [ ] Bulk operations handle large datasets efficiently
+- [ ] Concurrent operations don't cause data corruption
+
+### Success Metrics
+- All user CRUD operations accessible via CLI
+- Password security follows industry best practices
+- Module architecture supports future web interface
+- Comprehensive test coverage (>80%) including security scenarios
+- Clear documentation for both CLI usage and programmatic API
+- Performance supports expected user loads (1000+ users)
+
+---
+
+## Phase 8: CLI Integration and End-to-End Testing
+
+### Goals
+- Connect CLI commands to library functions (including new user management from Phase 7)
 - Implement full bootstrap workflow
 - Add comprehensive end-to-end testing
 - Create production-ready CLI tool
@@ -290,7 +414,7 @@ poststack/
 
 ### Core Functions
 - CLI commands use same functions as tests
-- Full setup workflow (build + verify + schema)
+- Full setup workflow (build + verify + schema + user management)
 - Progress reporting and user feedback
 - Comprehensive error handling and recovery
 - **Complete resource cleanup for reproducible testing**
@@ -324,6 +448,7 @@ poststack reset --confirm           # Full environment reset for clean slate tes
 - [ ] CLI build-images command works end-to-end
 - [ ] CLI verify-db command validates connectivity
 - [ ] CLI init-schema and update-schema work
+- [ ] **CLI user management commands integrate seamlessly**
 - [ ] CLI setup command completes full workflow
 - [ ] All error conditions are handled properly
 - [ ] **Cleanup commands remove all test artifacts**
@@ -334,7 +459,7 @@ poststack reset --confirm           # Full environment reset for clean slate tes
 ### End-to-End Testing Requirements
 
 - [ ] **Full environment setup from clean slate**
-- [ ] **Complete workflow: build → start → schema → verify → cleanup**
+- [ ] **Complete workflow: build → start → schema → user setup → verify → cleanup**
 - [ ] **Multiple test runs without interference**
 - [ ] **Resource monitoring to prevent accumulation**
 - [ ] **Automated cleanup in CI/CD pipelines**

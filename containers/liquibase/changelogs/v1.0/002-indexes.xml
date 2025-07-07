@@ -67,4 +67,37 @@
         </rollback>
     </changeSet>
 
+    <changeSet id="105-create-users-indexes" author="poststack">
+        <createIndex indexName="idx_users_username" schemaName="poststack" tableName="users">
+            <column name="username"/>
+        </createIndex>
+        <createIndex indexName="idx_users_email" schemaName="poststack" tableName="users">
+            <column name="email"/>
+        </createIndex>
+        <createIndex indexName="idx_users_active" schemaName="poststack" tableName="users">
+            <column name="active"/>
+        </createIndex>
+        <createIndex indexName="idx_users_email_verified" schemaName="poststack" tableName="users">
+            <column name="email_verified"/>
+        </createIndex>
+        <createIndex indexName="idx_users_password_reset_token" schemaName="poststack" tableName="users">
+            <column name="password_reset_token"/>
+        </createIndex>
+        <createIndex indexName="idx_users_locked_until" schemaName="poststack" tableName="users">
+            <column name="locked_until"/>
+        </createIndex>
+        <createIndex indexName="idx_users_last_login_at" schemaName="poststack" tableName="users">
+            <column name="last_login_at"/>
+        </createIndex>
+        <rollback>
+            <dropIndex indexName="idx_users_username" schemaName="poststack" tableName="users"/>
+            <dropIndex indexName="idx_users_email" schemaName="poststack" tableName="users"/>
+            <dropIndex indexName="idx_users_active" schemaName="poststack" tableName="users"/>
+            <dropIndex indexName="idx_users_email_verified" schemaName="poststack" tableName="users"/>
+            <dropIndex indexName="idx_users_password_reset_token" schemaName="poststack" tableName="users"/>
+            <dropIndex indexName="idx_users_locked_until" schemaName="poststack" tableName="users"/>
+            <dropIndex indexName="idx_users_last_login_at" schemaName="poststack" tableName="users"/>
+        </rollback>
+    </changeSet>
+
 </databaseChangeLog>

@@ -69,4 +69,20 @@
         </rollback>
     </changeSet>
 
+    <changeSet id="203-insert-admin-user" author="poststack">
+        <insert schemaName="poststack" tableName="users">
+            <column name="username" value="admin"/>
+            <column name="email" value="admin@localhost"/>
+            <column name="email_verified" value="true"/>
+            <column name="password_hash" value="$6$rounds=5000$poststack$XxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXx"/>
+            <column name="hash_algorithm" value="SHA512-CRYPT"/>
+            <column name="active" value="true"/>
+        </insert>
+        <rollback>
+            <delete schemaName="poststack" tableName="users">
+                <where>username = 'admin'</where>
+            </delete>
+        </rollback>
+    </changeSet>
+
 </databaseChangeLog>
