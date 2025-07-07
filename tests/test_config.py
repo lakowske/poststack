@@ -4,6 +4,7 @@ Tests for configuration management module.
 
 import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -118,15 +119,17 @@ class TestPoststackConfig:
 
     def test_configuration_properties(self, isolated_test_env):
         """Test configuration property methods."""
-        # Without database URL
-        config = PoststackConfig()
-        assert not config.is_database_configured
+        # Mock auto-detection to return None for clean testing
+        with patch.object(PoststackConfig, 'get_auto_detected_database_url', return_value=None):
+            # Without database URL
+            config = PoststackConfig()
+            assert not config.is_database_configured
 
-        # With database URL
-        config = PoststackConfig(
-            database_url="postgresql://user:pass@localhost:5432/db"
-        )
-        assert config.is_database_configured
+            # With database URL
+            config = PoststackConfig(
+                database_url="postgresql://user:pass@localhost:5432/db"
+            )
+            assert config.is_database_configured
 
         # Without domain configuration
         config = PoststackConfig()

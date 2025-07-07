@@ -351,26 +351,35 @@ class TestLiquibaseRunner:
         """Test database URL parsing."""
         url = "postgresql://testuser:testpass@localhost:5433/testdb"
         
-        result = liquibase_runner._parse_database_url(url)
+        # Mock subprocess call to prevent host IP detection during testing
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value.returncode = 1  # Fail IP detection to keep localhost
+            result = liquibase_runner._parse_database_url(url)
         
         assert result["DATABASE_HOST"] == "localhost"
         assert result["DATABASE_PORT"] == "5433"
         assert result["DATABASE_NAME"] == "testdb"
         assert result["DATABASE_USER"] == "testuser"
         assert result["DATABASE_PASSWORD"] == "testpass"
-        assert result["DATABASE_URL"] == url
+        # URL should be converted to JDBC format
+        assert result["DATABASE_URL"] == "jdbc:postgresql://localhost:5433/testdb"
     
     def test_parse_database_url_minimal(self, liquibase_runner):
         """Test database URL parsing with minimal information."""
         url = "postgresql://localhost/testdb"
         
-        result = liquibase_runner._parse_database_url(url)
+        # Mock subprocess call to prevent host IP detection during testing
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value.returncode = 1  # Fail IP detection to keep localhost
+            result = liquibase_runner._parse_database_url(url)
         
         assert result["DATABASE_HOST"] == "localhost"
         assert result["DATABASE_PORT"] == "5432"  # Default
         assert result["DATABASE_NAME"] == "testdb"
         assert result["DATABASE_USER"] == "postgres"  # Default
         assert result["DATABASE_PASSWORD"] == ""  # Default
+        # URL should be converted to JDBC format
+        assert result["DATABASE_URL"] == "jdbc:postgresql://localhost:5432/testdb"
 
 
 class TestContainerLifecycleManager:

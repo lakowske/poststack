@@ -50,7 +50,9 @@ class TestCLIBasics:
         """Test config-validate with default configuration."""
         runner = CliRunner()
 
-        with patch.dict(os.environ, {}, clear=True):
+        # Mock auto-detection to return None for clean testing
+        with patch.dict(os.environ, {}, clear=True), \
+             patch('poststack.config.PoststackConfig.get_auto_detected_database_url', return_value=None):
             result = runner.invoke(cli, ["config-validate"])
 
         # Should fail due to missing database URL and domain
@@ -186,7 +188,9 @@ class TestDatabaseCommands:
         """Test database connection test without configuration."""
         runner = CliRunner()
 
-        with patch.dict(os.environ, {}, clear=True):
+        # Mock auto-detection to return None for clean testing
+        with patch.dict(os.environ, {}, clear=True), \
+             patch('poststack.config.PoststackConfig.get_auto_detected_database_url', return_value=None):
             result = runner.invoke(cli, ["database", "test-connection"])
 
         assert result.exit_code == 1
@@ -196,7 +200,9 @@ class TestDatabaseCommands:
         """Test database schema creation without configuration."""
         runner = CliRunner()
 
-        with patch.dict(os.environ, {}, clear=True):
+        # Mock auto-detection to return None for clean testing
+        with patch.dict(os.environ, {}, clear=True), \
+             patch('poststack.config.PoststackConfig.get_auto_detected_database_url', return_value=None):
             result = runner.invoke(cli, ["database", "create-schema"])
 
         assert result.exit_code == 1
@@ -206,7 +212,9 @@ class TestDatabaseCommands:
         """Test database schema display without configuration."""
         runner = CliRunner()
 
-        with patch.dict(os.environ, {}, clear=True):
+        # Mock auto-detection to return None for clean testing
+        with patch.dict(os.environ, {}, clear=True), \
+             patch('poststack.config.PoststackConfig.get_auto_detected_database_url', return_value=None):
             result = runner.invoke(cli, ["database", "show-schema"])
 
         assert result.exit_code == 1
