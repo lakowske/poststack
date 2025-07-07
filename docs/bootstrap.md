@@ -79,7 +79,7 @@ The CLI tool checks for database configuration in the following order:
 The CLI tool implements structured logging with the following components:
 
 1. **Console Output**: Summary progress and results to stdout/stderr
-2. **Subprocess Logs**: Detailed output from container builds and Liquibase operations
+2. **Subprocess Logs**: Detailed output from container builds and schema operations
 3. **Structured Logs**: JSON-formatted logs for integration with monitoring systems
 
 ### Logging Configuration
@@ -109,7 +109,7 @@ logging.basicConfig(
 
 ### Subprocess Logging
 
-All subprocess operations (container builds, Liquibase) redirect output to dedicated log files:
+All subprocess operations (container builds, schema management) redirect output to dedicated log files:
 
 ```python
 def run_with_logging(cmd, log_file, operation_name):
@@ -159,7 +159,6 @@ def build_images():
         ("apache", "containers/apache/Dockerfile"),
         ("dovecot", "containers/dovecot/Dockerfile"),
         ("bind", "containers/bind/Dockerfile"),
-        ("liquibase", "containers/liquibase/Dockerfile")
     ]
     
     success_count = 0
@@ -234,7 +233,7 @@ def verify_database(database_url):
 
 The CLI tool automatically detects schema state and takes appropriate action:
 
-1. Check if schema exists (query for `DATABASECHANGELOG` table from Liquibase)
+1. Check if schema exists (query for `poststack` schema)
 2. Determine schema state:
    - **No schema**: Initialize with `init-schema` command
    - **Outdated schema**: Update with `update-schema` command
@@ -249,8 +248,8 @@ The CLI tool automatically detects schema state and takes appropriate action:
 └────────┬────────┘
          │
          ▼
-┌─────────────────┐     No DATABASECHANGELOG
-│ Check Liquibase │─────────────────────────┐
+┌─────────────────┐     No Schema
+│ Check Schema    │─────────────────────────┐
 │     Tables      │                         │
 └────────┬────────┘                         ▼
          │                         ┌─────────────────┐
@@ -277,264 +276,63 @@ The CLI tool automatically detects schema state and takes appropriate action:
 └─────────────────┘
 ```
 
-### Liquibase Integration
 
-The CLI tool uses Liquibase via Podman container for all schema operations with comprehensive logging:
+### Schema Management Integration
 
-```python
-def run_liquibase(database_url, command='update'):
-    """Execute Liquibase command via Podman container with logging"""
-    logger = logging.getLogger(__name__)
-    
-    # Parse database URL
-    db_params = parse_database_url(database_url)
-    
-    # Create log file for this operation
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = f"logs/database/liquibase_{command}_{timestamp}.log"
-    
-    # Liquibase command
-    cmd = [
-        'podman', 'run', '--rm',
-        '-v', f'{os.path.abspath("./changelog")}:/liquibase/changelog:ro',
-        'liquibase/liquibase:latest',
-        f'--url=jdbc:postgresql://{db_params.host}:{db_params.port}/{db_params.database}',
-        f'--username={db_params.username}',
-        f'--password={db_params.password}',
-        '--changeLogFile=changelog/db.changelog-master.xml',
-        command
-    ]
-    
-    # Run with logging
-    return_code = run_with_logging(cmd, log_file, f"Liquibase {command}")
-    
-    # Log database state after operation
-    if return_code == 0:
-        logger.info(f"Liquibase {command} completed successfully")
-        log_schema_status(database_url)
-    else:
-        logger.error(f"Liquibase {command} failed with return code {return_code}")
-        logger.error(f"Check {log_file} for details")
-    
-    return return_code
-
-def log_schema_status(database_url):
-    """Log current schema status after operations"""
-    logger = logging.getLogger(__name__)
-    
-    try:
-        conn = psycopg2.connect(database_url)
-        cursor = conn.cursor()
-        
-        # Check if changelog table exists
-        cursor.execute("""
-            SELECT COUNT(*) FROM information_schema.tables 
-            WHERE table_name = 'databasechangelog'
-        """)
-        
-        if cursor.fetchone()[0] > 0:
-            # Get changeset count
-            cursor.execute("SELECT COUNT(*) FROM databasechangelog")
-            changeset_count = cursor.fetchone()[0]
-            
-            # Get latest changeset
-            cursor.execute("""
-                SELECT id, author, filename, dateexecuted 
-                FROM databasechangelog 
-                ORDER BY dateexecuted DESC 
-                LIMIT 1
-            """)
-            latest = cursor.fetchone()
-            
-            logger.info(f"Schema status: {changeset_count} changesets applied")
-            if latest:
-                logger.info(f"Latest changeset: {latest[0]} by {latest[1]} ({latest[3]})")
-        else:
-            logger.info("Schema status: No Liquibase changelog found")
-            
-        conn.close()
-        
-    except Exception as e:
-        logger.error(f"Failed to check schema status: {str(e)}")
-```
-
-### Changelog Structure
-
-```
-changelog/
-├── db.changelog-master.xml
-├── changes/
-│   ├── 001-core-tables.xml
-│   ├── 002-service-tables.xml
-│   ├── 003-initial-data.xml
-│   └── 004-indexes.xml
-└── rollback/
-    └── emergency-rollback.xml
-```
-
-Master changelog example:
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<databaseChangeLog
-    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
-    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
-        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
-    
-    <include file="changes/001-core-tables.xml" relativeToChangelogFile="true"/>
-    <include file="changes/002-service-tables.xml" relativeToChangelogFile="true"/>
-    <include file="changes/003-initial-data.xml" relativeToChangelogFile="true"/>
-    <include file="changes/004-indexes.xml" relativeToChangelogFile="true"/>
-</databaseChangeLog>
-```
-
-### Schema Management Commands
-
-#### init-schema Command
+The CLI tool uses the built-in SQL migration system for all schema operations:
 
 ```python
 def init_schema(database_url):
     """Initialize database schema from scratch"""
     logger = logging.getLogger(__name__)
     
+    from .schema_management import SchemaManager
+    from .config import PoststackConfig
+    
+    config = PoststackConfig()
+    schema_manager = SchemaManager(config)
+    
     logger.info("Initializing database schema")
-    print("▶ Initializing database schema...")
     
-    # Check if schema already exists
-    if check_changelog_exists(database_url):
-        logger.warning("Schema already exists - use update-schema instead")
-        print(" ✗ Schema already exists")
-        return False
+    # Run migrations
+    result = schema_manager.update_schema(database_url)
     
-    # Run initial Liquibase update
-    result = run_liquibase(database_url, 'update')
-    
-    if result == 0:
-        logger.info("✓ Database schema initialized successfully")
-        print(" ✓ Schema initialized")
-        return True
-    else:
-        logger.error("✗ Failed to initialize schema")
-        print(" ✗ Schema initialization failed")
-        return False
-
-def update_schema(database_url):
-    """Update existing database schema"""
-    logger = logging.getLogger(__name__)
-    
-    logger.info("Updating database schema")
-    print("▶ Updating database schema...")
-    
-    # Check for pending changes first
-    pending_count = check_pending_changes(database_url)
-    if pending_count == 0:
-        logger.info("No pending schema changes")
-        print(" ✓ Schema is up to date")
-        return True
-    
-    logger.info(f"Found {pending_count} pending changes")
-    print(f"  {pending_count} pending changes found")
-    
-    # Create backup tag
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    tag_result = run_liquibase(database_url, f'tag pre-update-{timestamp}')
-    
-    if tag_result != 0:
-        logger.error("Failed to create backup tag")
-        print(" ✗ Failed to create backup tag")
-        return False
-    
-    # Apply updates
-    result = run_liquibase(database_url, 'update')
-    
-    if result == 0:
-        logger.info("✓ Database schema updated successfully")
-        print(" ✓ Schema updated")
-        return True
-    else:
-        logger.error("✗ Failed to update schema")
-        print(f" ✗ Schema update failed (backup tag: pre-update-{timestamp})")
-        return False
-
-def check_pending_changes(database_url):
-    """Check for pending Liquibase changes"""
-    logger = logging.getLogger(__name__)
-    
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = f"logs/database/liquibase_status_{timestamp}.log"
-    
-    result = run_liquibase(database_url, 'status')
-    
-    if result == 0:
-        # Parse output to count pending changes
-        try:
-            with open(log_file, 'r') as f:
-                content = f.read()
-                # Count lines containing "not run"
-                pending_count = content.count('not run')
-                logger.info(f"Found {pending_count} pending changes")
-                return pending_count
-        except Exception as e:
-            logger.error(f"Failed to parse status output: {str(e)}")
+    if result.success:
+        logger.info("Schema initialization completed successfully")
+        
+        # Verify schema
+        verification = schema_manager.verify_schema(database_url)
+        if verification.passed:
+            logger.info("Schema verification passed")
+            return 0
+        else:
+            logger.error(f"Schema verification failed: {verification.message}")
             return -1
     else:
-        logger.error("Failed to check schema status")
+        logger.error(f"Schema initialization failed: {result.logs}")
         return -1
-```
 
-### Initial Configuration
-
-After schema creation, Liquibase applies initial data:
-
-```xml
-<!-- changes/003-initial-data.xml -->
-<databaseChangeLog>
-    <changeSet id="3.1" author="poststack">
-        <insert tableName="config">
-            <column name="key" value="domain_name"/>
-            <column name="value" value=""/>
-            <column name="description" value="Primary domain - must be configured"/>
-        </insert>
-        <insert tableName="config">
-            <column name="key" value="le_email"/>
-            <column name="value" value=""/>
-            <column name="description" value="Let's Encrypt email - must be configured"/>
-        </insert>
-        <insert tableName="config">
-            <column name="key" value="cert_path"/>
-            <column name="value" value="/data/certificates"/>
-            <column name="description" value="Certificate storage path"/>
-        </insert>
-        <insert tableName="config">
-            <column name="key" value="log_level"/>
-            <column name="value" value="INFO"/>
-            <column name="description" value="Default logging level"/>
-        </insert>
-    </changeSet>
+def update_schema(database_url):
+    """Update existing schema to latest version"""
+    logger = logging.getLogger(__name__)
     
-    <changeSet id="3.2" author="poststack">
-        <insert tableName="services">
-            <column name="name" value="postgres"/>
-            <column name="enabled" valueBoolean="true"/>
-        </insert>
-        <insert tableName="services">
-            <column name="name" value="apache"/>
-            <column name="enabled" valueBoolean="false"/>
-        </insert>
-        <insert tableName="services">
-            <column name="name" value="bind"/>
-            <column name="enabled" valueBoolean="false"/>
-        </insert>
-        <insert tableName="services">
-            <column name="name" value="mail"/>
-            <column name="enabled" valueBoolean="false"/>
-        </insert>
-        <insert tableName="services">
-            <column name="name" value="certbot"/>
-            <column name="enabled" valueBoolean="false"/>
-        </insert>
-    </changeSet>
-</databaseChangeLog>
+    from .schema_management import SchemaManager
+    from .config import PoststackConfig
+    
+    config = PoststackConfig()
+    schema_manager = SchemaManager(config)
+    
+    logger.info("Updating database schema")
+    
+    # Run migrations
+    result = schema_manager.update_schema(database_url)
+    
+    if result.success:
+        logger.info("Schema update completed successfully")
+        return 0
+    else:
+        logger.error(f"Schema update failed: {result.logs}")
+        return -1
 ```
 
 ## Error Handling

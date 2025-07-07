@@ -12,7 +12,6 @@ from unittest.mock import Mock, patch, MagicMock
 from poststack.config import PoststackConfig
 from poststack.container_runtime import (
     PostgreSQLRunner,
-    LiquibaseRunner,
     ContainerLifecycleManager,
 )
 from poststack.models import RuntimeResult, RuntimeStatus, HealthCheckResult
@@ -235,152 +234,6 @@ class TestPostgreSQLRunner:
             assert result is False
 
 
-class TestLiquibaseRunner:
-    """Test Liquibase container runtime operations."""
-    
-    @pytest.fixture
-    def config(self):
-        """Create test configuration."""
-        return PoststackConfig(test_mode=True)
-    
-    @pytest.fixture
-    def liquibase_runner(self, config):
-        """Create Liquibase runner instance."""
-        return LiquibaseRunner(config)
-    
-    def test_liquibase_runner_initialization(self, liquibase_runner):
-        """Test Liquibase runner initialization."""
-        assert liquibase_runner.container_runtime == "podman"
-    
-    @patch('poststack.container_runtime.subprocess.run')
-    def test_run_liquibase_command_success(self, mock_run, liquibase_runner):
-        """Test successful Liquibase command execution."""
-        mock_run.return_value = Mock(
-            returncode=0,
-            stdout="Liquibase command completed successfully",
-            stderr="",
-        )
-        
-        result = liquibase_runner.run_liquibase_command(
-            command="status",
-            database_url="postgresql://user:pass@localhost:5432/testdb",
-        )
-        
-        assert result.success
-        assert "completed successfully" in result.logs
-    
-    @patch('poststack.container_runtime.subprocess.run')
-    def test_run_liquibase_command_failure(self, mock_run, liquibase_runner):
-        """Test failed Liquibase command execution."""
-        mock_run.return_value = Mock(
-            returncode=1,
-            stdout="",
-            stderr="Liquibase error: connection failed",
-        )
-        
-        result = liquibase_runner.run_liquibase_command(
-            command="update",
-            database_url="postgresql://user:pass@localhost:5432/testdb",
-        )
-        
-        assert not result.success
-        assert result.status == RuntimeStatus.FAILED
-        assert "connection failed" in result.logs
-    
-    @patch('poststack.container_runtime.subprocess.run')
-    def test_run_liquibase_command_timeout(self, mock_run, liquibase_runner):
-        """Test Liquibase command timeout."""
-        from subprocess import TimeoutExpired
-        mock_run.side_effect = TimeoutExpired("liquibase", 30)
-        
-        result = liquibase_runner.run_liquibase_command(
-            command="update",
-            database_url="postgresql://user:pass@localhost:5432/testdb",
-            timeout=30,
-        )
-        
-        assert not result.success
-        assert result.status == RuntimeStatus.FAILED
-        assert "timed out after 30 seconds" in result.logs
-    
-    def test_health_check_liquibase_success(self, liquibase_runner):
-        """Test Liquibase health check - success."""
-        with patch.object(liquibase_runner, 'run_liquibase_command') as mock_cmd:
-            mock_cmd.return_value = Mock(
-                success=True,
-                logs="Liquibase status: Up to date",
-            )
-            
-            result = liquibase_runner.health_check_liquibase(
-                database_url="postgresql://user:pass@localhost:5432/testdb",
-            )
-            
-            assert result.passed
-            assert "status check passed" in result.message
-    
-    def test_health_check_liquibase_failure(self, liquibase_runner):
-        """Test Liquibase health check - failure."""
-        with patch.object(liquibase_runner, 'run_liquibase_command') as mock_cmd:
-            mock_cmd.return_value = Mock(
-                success=False,
-                logs="Connection failed",
-            )
-            
-            result = liquibase_runner.health_check_liquibase(
-                database_url="postgresql://user:pass@localhost:5432/testdb",
-            )
-            
-            assert not result.passed
-            assert "status check failed" in result.message
-    
-    @patch('poststack.container_runtime.subprocess.run')
-    def test_verify_liquibase_side_effects(self, mock_run, liquibase_runner):
-        """Test Liquibase side effects verification."""
-        # Mock successful table checks
-        mock_run.return_value = Mock(returncode=0)
-        
-        results = liquibase_runner.verify_liquibase_side_effects(
-            database_url="postgresql://user:pass@localhost:5432/testdb",
-            expected_tables=["databasechangelog", "test_table"],
-        )
-        
-        assert results["table_databasechangelog"] is True
-        assert results["table_test_table"] is True
-    
-    def test_parse_database_url(self, liquibase_runner):
-        """Test database URL parsing."""
-        url = "postgresql://testuser:testpass@localhost:5433/testdb"
-        
-        # Mock subprocess call to prevent host IP detection during testing
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value.returncode = 1  # Fail IP detection to keep localhost
-            result = liquibase_runner._parse_database_url(url)
-        
-        assert result["DATABASE_HOST"] == "localhost"
-        assert result["DATABASE_PORT"] == "5433"
-        assert result["DATABASE_NAME"] == "testdb"
-        assert result["DATABASE_USER"] == "testuser"
-        assert result["DATABASE_PASSWORD"] == "testpass"
-        # URL should be converted to JDBC format
-        assert result["DATABASE_URL"] == "jdbc:postgresql://localhost:5433/testdb"
-    
-    def test_parse_database_url_minimal(self, liquibase_runner):
-        """Test database URL parsing with minimal information."""
-        url = "postgresql://localhost/testdb"
-        
-        # Mock subprocess call to prevent host IP detection during testing
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value.returncode = 1  # Fail IP detection to keep localhost
-            result = liquibase_runner._parse_database_url(url)
-        
-        assert result["DATABASE_HOST"] == "localhost"
-        assert result["DATABASE_PORT"] == "5432"  # Default
-        assert result["DATABASE_NAME"] == "testdb"
-        assert result["DATABASE_USER"] == "postgres"  # Default
-        assert result["DATABASE_PASSWORD"] == ""  # Default
-        # URL should be converted to JDBC format
-        assert result["DATABASE_URL"] == "jdbc:postgresql://localhost:5432/testdb"
-
 
 class TestContainerLifecycleManager:
     """Test complete container lifecycle management."""
@@ -398,7 +251,6 @@ class TestContainerLifecycleManager:
     def test_lifecycle_manager_initialization(self, lifecycle_manager):
         """Test lifecycle manager initialization."""
         assert isinstance(lifecycle_manager.postgres_runner, PostgreSQLRunner)
-        assert isinstance(lifecycle_manager.liquibase_runner, LiquibaseRunner)
         assert lifecycle_manager.running_containers == []
     
     def test_start_test_environment_success(self, lifecycle_manager):
@@ -546,15 +398,11 @@ class TestPhase5Integration:
                     assert health_result.passed
                     assert len(lifecycle_manager.running_containers) == 1
                     
-                    # Test Liquibase operations
+                    # Test database connectivity
                     database_url = "postgresql://poststack:poststack_dev@localhost:5433/poststack"
                     
-                    liquibase_result = lifecycle_manager.liquibase_runner.run_liquibase_command(
-                        command="status",
-                        database_url=database_url,
-                    )
-                    
-                    assert liquibase_result.success
+                    # Verify PostgreSQL is accessible
+                    assert postgres_result.success
                     
                     # Cleanup
                     cleanup_success = lifecycle_manager.cleanup_test_environment()
@@ -613,18 +461,11 @@ class TestPhase5Integration:
             assert side_effects["port_listening"], "PostgreSQL port not listening"
             assert side_effects["accepting_connections"], "PostgreSQL not accepting connections"
             
-            # Test Liquibase operations
+            # Test database connectivity
             database_url = "postgresql://poststack:poststack_dev@localhost:5433/poststack"
             
-            # Run Liquibase status
-            liquibase_result = lifecycle_manager.liquibase_runner.run_liquibase_command(
-                command="status",
-                database_url=database_url,
-                timeout=60,
-            )
-            
-            # Note: Liquibase might fail if changelog files don't exist, but the container should run
-            assert "liquibase" in liquibase_result.logs.lower()
+            # Basic connectivity verification already done by health check
+            assert health_result.passed
             
         finally:
             # Always cleanup

@@ -113,7 +113,7 @@ All bootstrap operations create detailed logs:
 - **Console Output**: Progress and summary information
 - **Main Logs**: `logs/bootstrap_YYYYMMDD_HHMMSS.log`
 - **Container Builds**: `logs/containers/[image]_build_YYYYMMDD_HHMMSS.log`
-- **Database Operations**: `logs/database/liquibase_[operation]_YYYYMMDD_HHMMSS.log`
+- **Database Operations**: `logs/database/schema_[operation]_YYYYMMDD_HHMMSS.log`
 
 Use `--verbose` flag for more detailed console output.
 

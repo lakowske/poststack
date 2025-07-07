@@ -45,7 +45,6 @@ debian:bookworm-slim
         ├── mail-debian
         ├── certbot-debian
         ├── postgres-debian
-        └── liquibase-debian
 ```
 
 ### Shared Resources

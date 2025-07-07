@@ -77,41 +77,14 @@ class TestPhase4ContainerBuilds:
         assert "postgresql" in content.lower()
         assert "EXPOSE 5432" in content
     
-    def test_dockerfile_exists_liquibase(self):
-        """Test that liquibase Dockerfile exists and is valid."""
-        dockerfile_path = Path("containers/liquibase/Dockerfile")
-        assert dockerfile_path.exists(), "liquibase Dockerfile not found"
-        
-        content = dockerfile_path.read_text()
-        assert "FROM poststack/base-debian:latest" in content
-        assert "liquibase" in content.lower()
-        assert "openjdk" in content.lower()
-    
     def test_entrypoint_scripts_exist(self):
         """Test that entrypoint scripts exist and are executable."""
         postgres_entrypoint = Path("containers/postgres/entrypoint.sh")
-        liquibase_entrypoint = Path("containers/liquibase/entrypoint.sh")
         
         assert postgres_entrypoint.exists(), "postgres entrypoint.sh not found"
-        assert liquibase_entrypoint.exists(), "liquibase entrypoint.sh not found"
         
         # Check scripts start with shebang
         assert postgres_entrypoint.read_text().startswith("#!/bin/bash")
-        assert liquibase_entrypoint.read_text().startswith("#!/bin/bash")
-    
-    def test_liquibase_changelogs_exist(self):
-        """Test that Liquibase changelog files exist."""
-        master_changelog = Path("containers/liquibase/changelogs/master.xml")
-        assert master_changelog.exists(), "master changelog not found"
-        
-        # Check for v1.0 changelogs
-        v1_schema = Path("containers/liquibase/changelogs/v1.0/001-initial-schema.xml")
-        v1_indexes = Path("containers/liquibase/changelogs/v1.0/002-indexes.xml")
-        v1_data = Path("containers/liquibase/changelogs/v1.0/003-initial-data.xml")
-        
-        assert v1_schema.exists(), "v1.0 schema changelog not found"
-        assert v1_indexes.exists(), "v1.0 indexes changelog not found"
-        assert v1_data.exists(), "v1.0 data changelog not found"
     
     @pytest.mark.slow
     def test_build_base_image_mock(self, real_builder):
@@ -153,23 +126,6 @@ class TestPhase4ContainerBuilds:
             assert result.status == BuildStatus.SUCCESS
             assert mock_run.called
     
-    @pytest.mark.slow
-    def test_build_liquibase_image_mock(self, real_builder):
-        """Test building liquibase image with mocked subprocess."""
-        # Mock base image as already built
-        real_builder.base_images_built.add("poststack/base-debian:latest")
-        
-        with patch('subprocess.run') as mock_run:
-            # Mock successful build
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = "Successfully built poststack/liquibase"
-            mock_run.return_value.stderr = ""
-            
-            result = real_builder.build_liquibase_image()
-            
-            assert result.image_name == "poststack/liquibase:latest"
-            assert result.status == BuildStatus.SUCCESS
-            assert mock_run.called
     
     @pytest.mark.slow 
     def test_build_all_phase4_images_mock(self, real_builder):
@@ -182,16 +138,15 @@ class TestPhase4ContainerBuilds:
             
             results = real_builder.build_all_phase4_images(parallel=False)
             
-            assert len(results) == 3
+            assert len(results) == 2
             assert "base-debian" in results
             assert "postgres" in results
-            assert "liquibase" in results
             
             # All should be successful
             assert all(r.success for r in results.values())
             
             # Check that builds were called in correct order
-            assert mock_run.call_count >= 3
+            assert mock_run.call_count >= 2
     
     def test_build_dependency_order(self, real_builder):
         """Test that builds fail properly when dependencies are missing."""
@@ -309,13 +264,6 @@ class TestPhase4Integration:
             "containers/postgres/entrypoint.sh",
             "containers/postgres/postgresql.conf.template",
             "containers/postgres/pg_hba.conf.template",
-            "containers/liquibase/Dockerfile",
-            "containers/liquibase/entrypoint.sh",
-            "containers/liquibase/liquibase.properties.template",
-            "containers/liquibase/changelogs/master.xml",
-            "containers/liquibase/changelogs/v1.0/001-initial-schema.xml",
-            "containers/liquibase/changelogs/v1.0/002-indexes.xml",
-            "containers/liquibase/changelogs/v1.0/003-initial-data.xml",
         ]
         
         for file_path in required_files:
@@ -331,8 +279,6 @@ class TestPhase4Integration:
         postgres_dockerfile = Path("containers/postgres/Dockerfile").read_text()
         assert "FROM poststack/base-debian:latest" in postgres_dockerfile
         
-        liquibase_dockerfile = Path("containers/liquibase/Dockerfile").read_text()
-        assert "FROM poststack/base-debian:latest" in liquibase_dockerfile
     
     def test_certificate_group_setup(self):
         """Test that certificate group setup is consistent."""
@@ -360,39 +306,19 @@ class TestPhase4Integration:
         dockerfiles = [
             "containers/base-debian/Dockerfile",
             "containers/postgres/Dockerfile", 
-            "containers/liquibase/Dockerfile",
         ]
         
         for dockerfile_path in dockerfiles:
             content = Path(dockerfile_path).read_text()
             assert "HEALTHCHECK" in content, f"No health check in {dockerfile_path}"
     
-    def test_liquibase_changelog_structure(self):
-        """Test that Liquibase changelog structure is valid."""
-        master_changelog = Path("containers/liquibase/changelogs/master.xml")
-        content = master_changelog.read_text()
-        
-        # Check XML structure
-        assert '<?xml version="1.0"' in content
-        assert 'databaseChangeLog' in content
-        assert 'include file=' in content
-        
-        # Check that it includes the v1.0 files
-        assert "v1.0/001-initial-schema.xml" in content
-        assert "v1.0/002-indexes.xml" in content  
-        assert "v1.0/003-initial-data.xml" in content
     
     def test_entrypoint_script_functionality(self):
         """Test that entrypoint scripts have required functionality."""
         postgres_entrypoint = Path("containers/postgres/entrypoint.sh").read_text()
-        liquibase_entrypoint = Path("containers/liquibase/entrypoint.sh").read_text()
         
         # PostgreSQL entrypoint should handle common scenarios
         assert "init_database" in postgres_entrypoint
         assert "configure_postgresql" in postgres_entrypoint
         assert "substitute_template" in postgres_entrypoint
         
-        # Liquibase entrypoint should handle Liquibase operations
-        assert "run_liquibase" in liquibase_entrypoint
-        assert "validate_database_connection" in liquibase_entrypoint
-        assert "wait_for_database" in liquibase_entrypoint

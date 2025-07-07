@@ -100,43 +100,6 @@ class RealContainerBuilder(ContainerBuilder):
             
         return result
     
-    def build_liquibase_image(self) -> BuildResult:
-        """
-        Build the Liquibase container image.
-        
-        Returns:
-            BuildResult with build status and details
-        """
-        # Ensure base image is built first
-        if "poststack/base-debian:latest" not in self.base_images_built:
-            base_result = self.build_base_image()
-            if not base_result.success:
-                logger.error("Cannot build liquibase image: base image build failed")
-                return base_result
-        
-        image_name = "poststack/liquibase:latest"
-        dockerfile_path = Path("containers/liquibase/Dockerfile")
-        
-        logger.info("Building Liquibase image: %s", image_name)
-        
-        result = self.build_image(
-            image_name=image_name,
-            dockerfile_path=dockerfile_path,
-            context_path=Path("."),  # Use project root as context
-            tags=["poststack/liquibase:latest", "poststack/liquibase:4.24.0"],
-            build_args={
-                "LIQUIBASE_VERSION": "4.24.0",
-            },
-            no_cache=False,
-            timeout=600,
-        )
-        
-        if result.success:
-            logger.info("Liquibase image built successfully: %s", image_name)
-        else:
-            logger.error("Failed to build Liquibase image: %s", image_name)
-            
-        return result
     
     def build_all_phase4_images(self, parallel: bool = False) -> Dict[str, BuildResult]:
         """
@@ -161,35 +124,11 @@ class RealContainerBuilder(ContainerBuilder):
             logger.error("Base image build failed, cannot continue with dependent images")
             return results
         
-        # Stage 2: Build service images (can be done in parallel since they don't depend on each other)
+        # Stage 2: Build service images
         logger.info("Stage 2: Building service images")
         
-        if parallel:
-            # Build postgres and liquibase in parallel
-            build_specs = [
-                {
-                    "image_name": "poststack/postgres:latest",
-                    "dockerfile_path": Path("containers/postgres/Dockerfile"),
-                    "tags": ["poststack/postgres:latest", "poststack/postgres:15"],
-                    "build_args": {"POSTGRES_VERSION": "15"},
-                    "timeout": 600,
-                },
-                {
-                    "image_name": "poststack/liquibase:latest", 
-                    "dockerfile_path": Path("containers/liquibase/Dockerfile"),
-                    "tags": ["poststack/liquibase:latest", "poststack/liquibase:4.24.0"],
-                    "build_args": {"LIQUIBASE_VERSION": "4.24.0"},
-                    "timeout": 600,
-                },
-            ]
-            
-            parallel_results = self.build_images_parallel(build_specs, max_concurrent=2)
-            results["postgres"] = parallel_results[0]
-            results["liquibase"] = parallel_results[1]
-        else:
-            # Build sequentially
-            results["postgres"] = self.build_postgres_image()
-            results["liquibase"] = self.build_liquibase_image()
+        # Build PostgreSQL image
+        results["postgres"] = self.build_postgres_image()
         
         # Log final results
         successful = sum(1 for r in results.values() if r.success)

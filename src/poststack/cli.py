@@ -123,7 +123,7 @@ def container(ctx: click.Context) -> None:
 )
 @click.option(
     "--image",
-    type=click.Choice(["all", "base-debian", "postgres", "liquibase"]),
+    type=click.Choice(["all", "base-debian", "postgres"]),
     default="all",
     help="Specific image to build (default: all)",
 )
@@ -158,10 +158,6 @@ def container_build(
             click.echo("Building postgres image...")
             result = builder.build_postgres_image()
             results = {"postgres": result}
-        elif image == "liquibase":
-            click.echo("Building liquibase image...")
-            result = builder.build_liquibase_image()
-            results = {"liquibase": result}
         
         # Display results
         click.echo("\n📊 Build Results:")
@@ -201,7 +197,7 @@ def container_list(ctx: click.Context) -> None:
     try:
         builder = RealContainerBuilder(config)
         
-        images = ["poststack/base-debian:latest", "poststack/postgres:latest", "poststack/liquibase:latest"]
+        images = ["poststack/base-debian:latest", "poststack/postgres:latest"]
         
         click.echo("📦 Poststack Container Images:")
         click.echo("-" * 50)
@@ -253,9 +249,7 @@ def container_clean(ctx: click.Context, test_only: bool, force: bool) -> None:
                 "poststack/base-debian:latest",
                 "poststack/base-debian:1.0.0", 
                 "poststack/postgres:latest",
-                "poststack/postgres:15",
-                "poststack/liquibase:latest",
-                "poststack/liquibase:4.24.0"
+                "poststack/postgres:15"
             ]
             
             # Check which images exist
@@ -414,7 +408,6 @@ def container_status(ctx: click.Context) -> None:
         container_names = [
             "poststack-postgres-test",
             "poststack-postgres",
-            "poststack-liquibase-temp",
         ]
         
         click.echo("📊 Container Status:")
@@ -495,11 +488,11 @@ def container_health(ctx: click.Context, container_name: str, postgres_port: int
                 icon = "✅" if result else "❌"
                 click.echo(f"     {icon} {check.replace('_', ' ').title()}")
         
-        # Liquibase health check if database URL available
+        # Database connectivity check if database URL available
         if config.is_database_configured:
             database_url = f"postgresql://poststack:poststack_dev@localhost:{postgres_port}/poststack"
-            liquibase_health = lifecycle_manager.liquibase_runner.health_check_liquibase(database_url)
-            click.echo(f"   Liquibase: {'✅' if liquibase_health.passed else '❌'} {liquibase_health.message}")
+            # Basic connectivity verification already done by PostgreSQL health check
+            click.echo(f"   Database: {'✅' if postgres_health.passed else '❌'} {postgres_health.message}")
         
     except Exception as e:
         click.echo(f"❌ Health check failed: {e}", err=True)

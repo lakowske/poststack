@@ -98,14 +98,14 @@ def test_connection(ctx: click.Context, timeout: int) -> None:
 )
 @click.pass_context
 def create_schema(ctx: click.Context, force: bool) -> None:
-    """Create the Poststack database schema using Liquibase."""
+    """Create the Poststack database schema using SQL migrations."""
     config: PoststackConfig = ctx.obj["config"]
 
     if not config.is_database_configured:
         click.echo("❌ Database not configured.", err=True)
         sys.exit(1)
 
-    click.echo("🏗️  Creating Poststack database schema using Liquibase...")
+    click.echo("🏗️  Creating Poststack database schema using SQL migrations...")
 
     if force:
         click.echo("⚠️  Force mode enabled - existing schema will be destroyed!")
@@ -125,7 +125,7 @@ def create_schema(ctx: click.Context, force: bool) -> None:
             click.echo(f"❌ Database connection failed: {connection_result.message}", err=True)
             sys.exit(1)
         
-        # Handle force mode - drop existing schema and Liquibase tracking
+        # Handle force mode - drop existing schema and migration tracking
         if force:
             try:
                 import psycopg2
@@ -142,10 +142,10 @@ def create_schema(ctx: click.Context, force: bool) -> None:
                     cursor.execute("DROP SCHEMA poststack CASCADE;")
                     click.echo("🗑️  Dropped existing schema")
                     
-                # Always drop Liquibase tracking tables in force mode to ensure clean state
-                cursor.execute("DROP TABLE IF EXISTS public.databasechangelog CASCADE;")
-                cursor.execute("DROP TABLE IF EXISTS public.databasechangeloglock CASCADE;")
-                click.echo("🗑️  Dropped Liquibase tracking tables")
+                # Drop migration tracking tables to ensure clean state
+                cursor.execute("DROP TABLE IF EXISTS public.schema_migrations CASCADE;")
+                cursor.execute("DROP TABLE IF EXISTS public.schema_migration_lock CASCADE;")
+                click.echo("🗑️  Dropped migration tracking tables")
                     
                 conn.commit()
                 cursor.close()
@@ -153,24 +153,11 @@ def create_schema(ctx: click.Context, force: bool) -> None:
             except Exception as e:
                 logger.warning(f"Failed to drop existing schema: {e}")
         
-        # Create schema first (Liquibase workaround)
-        try:
-            import psycopg2
-            conn = psycopg2.connect(effective_url)
-            cursor = conn.cursor()
-            cursor.execute("CREATE SCHEMA IF NOT EXISTS poststack;")
-            conn.commit()
-            cursor.close()
-            conn.close()
-            click.echo("✅ Created poststack schema")
-        except Exception as e:
-            logger.warning(f"Schema creation preparation: {e}")
-        
-        # Initialize schema using Liquibase
-        result = schema_manager.initialize_schema(effective_url)
+        # Initialize schema using migrations (same as migrate command)
+        result = schema_manager.update_schema(effective_url)
         
         if result.success:
-            click.echo("\n🎉 Database schema created successfully using Liquibase!")
+            click.echo("\n🎉 Database schema created successfully using SQL migrations!")
             
             # Show what was created
             verification = schema_manager.verify_schema(effective_url)
@@ -179,6 +166,11 @@ def create_schema(ctx: click.Context, force: bool) -> None:
                 tables = verification.details.get('tables', [])
                 if tables:
                     click.echo(f"   Tables Created: {', '.join(tables)}")
+                    
+            # Show migration status
+            migration_status = schema_manager.get_migration_status(effective_url)
+            applied_count = len(migration_status.get('applied_migrations', []))
+            click.echo(f"   Applied Migrations: {applied_count}")
         else:
             click.echo(f"❌ Schema creation failed: {result.logs}", err=True)
             sys.exit(1)
@@ -320,9 +312,9 @@ def drop_schema(ctx: click.Context, confirm: bool) -> None:
 
         cursor.execute("DROP SCHEMA poststack CASCADE;")
         
-        # Also drop Liquibase tracking tables to ensure clean state
-        cursor.execute("DROP TABLE IF EXISTS public.databasechangelog CASCADE;")
-        cursor.execute("DROP TABLE IF EXISTS public.databasechangeloglock CASCADE;")
+        # Clear migration tracking tables for clean state
+        cursor.execute("DELETE FROM public.schema_migrations;")
+        click.echo("🗑️  Cleared migration tracking records")
         
         conn.commit()
 
@@ -337,16 +329,23 @@ def drop_schema(ctx: click.Context, confirm: bool) -> None:
 
 
 @database.command()
+@click.option(
+    "--target",
+    help="Target migration version to migrate to"
+)
 @click.pass_context
-def migrate(ctx: click.Context) -> None:
-    """Run database migrations to latest version using Liquibase."""
+def migrate(ctx: click.Context, target: Optional[str]) -> None:
+    """Run database migrations to latest version using SQL migrations."""
     config: PoststackConfig = ctx.obj["config"]
 
     if not config.is_database_configured:
         click.echo("❌ Database not configured.", err=True)
         sys.exit(1)
 
-    click.echo("🔄 Running database migrations using Liquibase...")
+    if target:
+        click.echo(f"🔄 Running database migrations to version {target}...")
+    else:
+        click.echo("🔄 Running database migrations to latest version...")
 
     try:
         # Initialize managers
@@ -360,21 +359,41 @@ def migrate(ctx: click.Context) -> None:
             click.echo(f"❌ Database connection failed: {connection_result.message}", err=True)
             sys.exit(1)
         
-        # Get current schema status
-        status = schema_manager.get_schema_status(effective_url)
-        
-        if not status['verification']['passed']:
-            click.echo("❌ Poststack schema does not exist or is incomplete")
+        # Check if migration tracking tables exist
+        migration_status = schema_manager.get_migration_status(effective_url)
+        if 'error' in migration_status:
+            click.echo("❌ Migration system not initialized")
             click.echo("Run 'poststack database create-schema' first")
             sys.exit(1)
         
-        # Run Liquibase update to apply any pending migrations
-        result = schema_manager.update_schema(effective_url)
+        # Show current status
+        current_version = migration_status.get('current_version')
+        pending_count = len(migration_status.get('pending_migrations', []))
+        
+        if current_version:
+            click.echo(f"   Current version: {current_version}")
+        else:
+            click.echo("   No migrations applied yet")
+            
+        if pending_count == 0:
+            click.echo("✅ No pending migrations - database is up to date!")
+            return
+            
+        click.echo(f"   Found {pending_count} pending migration(s)")
+        
+        # Run migrations
+        result = schema_manager.update_schema(effective_url, target_version=target)
         
         if result.success:
             click.echo("✅ Database migrations completed successfully!")
             
             # Show updated status
+            updated_status = schema_manager.get_migration_status(effective_url)
+            new_version = updated_status.get('current_version')
+            if new_version:
+                click.echo(f"   New version: {new_version}")
+                
+            # Show schema version from system_info
             verification = schema_manager.verify_schema(effective_url)
             if verification.passed:
                 click.echo(f"   Schema Version: {verification.details.get('schema_version', 'unknown')}")
@@ -458,4 +477,199 @@ def backup(ctx: click.Context, table: Optional[str], output: Optional[str]) -> N
         sys.exit(1)
     except Exception as e:
         click.echo(f"❌ Backup failed: {e}", err=True)
+        sys.exit(1)
+
+
+@database.command()
+@click.pass_context
+def migration_status(ctx: click.Context) -> None:
+    """Show current migration status."""
+    config: PoststackConfig = ctx.obj["config"]
+
+    if not config.is_database_configured:
+        click.echo("❌ Database not configured.", err=True)
+        sys.exit(1)
+
+    try:
+        schema_manager = SchemaManager(config)
+        effective_url = config.effective_database_url
+        
+        click.echo("📊 Migration Status")
+        click.echo("=" * 40)
+        
+        migration_status = schema_manager.get_migration_status(effective_url)
+        
+        if 'error' in migration_status:
+            click.echo("❌ Migration system not initialized")
+            click.echo("Run 'poststack database create-schema' first")
+            return
+        
+        current_version = migration_status.get('current_version')
+        applied_migrations = migration_status.get('applied_migrations', [])
+        pending_migrations = migration_status.get('pending_migrations', [])
+        is_locked = migration_status.get('is_locked', False)
+        
+        if current_version:
+            click.echo(f"Current version: {current_version}")
+        else:
+            click.echo("Current version: None (no migrations applied)")
+            
+        click.echo(f"Applied migrations: {len(applied_migrations)}")
+        click.echo(f"Pending migrations: {len(pending_migrations)}")
+        
+        if is_locked:
+            lock_info = migration_status.get('lock_info', {})
+            click.echo("⚠️  Migration system is LOCKED")
+            if lock_info:
+                click.echo(f"   Locked by: {lock_info.get('locked_by', 'unknown')}")
+                click.echo(f"   Locked at: {lock_info.get('locked_at', 'unknown')}")
+        
+        if applied_migrations:
+            click.echo("\nApplied migrations:")
+            for migration in applied_migrations:
+                click.echo(f"  ✅ {migration['version']}: {migration.get('description', 'No description')}")
+        
+        if pending_migrations:
+            click.echo("\nPending migrations:")
+            for migration in pending_migrations:
+                click.echo(f"  ⏳ {migration['version']}: {migration.get('description', 'No description')}")
+        
+        if not pending_migrations and applied_migrations:
+            click.echo("\n✅ Database is up to date!")
+            
+    except Exception as e:
+        click.echo(f"❌ Failed to get migration status: {e}", err=True)
+        sys.exit(1)
+
+
+@database.command()
+@click.argument("target_version")
+@click.option(
+    "--confirm",
+    is_flag=True,
+    help="Skip confirmation prompt",
+)
+@click.pass_context
+def rollback(ctx: click.Context, target_version: str, confirm: bool) -> None:
+    """Rollback database to a specific migration version."""
+    config: PoststackConfig = ctx.obj["config"]
+
+    if not config.is_database_configured:
+        click.echo("❌ Database not configured.", err=True)
+        sys.exit(1)
+
+    click.echo(f"⚠️  Rolling back database to version {target_version}")
+    click.echo("⚠️  This will DESTROY data from newer migrations!")
+
+    if not confirm:
+        if not click.confirm("Are you sure you want to rollback?"):
+            click.echo("Rollback cancelled")
+            return
+
+    try:
+        schema_manager = SchemaManager(config)
+        effective_url = config.effective_database_url
+        
+        # Show current status
+        migration_status = schema_manager.get_migration_status(effective_url)
+        current_version = migration_status.get('current_version')
+        
+        if current_version:
+            click.echo(f"Current version: {current_version}")
+        else:
+            click.echo("❌ No migrations to rollback")
+            return
+            
+        if current_version <= target_version:
+            click.echo(f"❌ Target version {target_version} is not older than current version {current_version}")
+            return
+        
+        # Perform rollback
+        result = schema_manager.rollback_schema(effective_url, target_version)
+        
+        if result.success:
+            click.echo(f"✅ Database rolled back to version {target_version}")
+        else:
+            click.echo(f"❌ Rollback failed: {result.logs}", err=True)
+            sys.exit(1)
+            
+    except Exception as e:
+        click.echo(f"❌ Rollback failed: {e}", err=True)
+        sys.exit(1)
+
+
+@database.command()
+@click.pass_context
+def verify_migrations(ctx: click.Context) -> None:
+    """Verify that applied migrations match their checksums."""
+    config: PoststackConfig = ctx.obj["config"]
+
+    if not config.is_database_configured:
+        click.echo("❌ Database not configured.", err=True)
+        sys.exit(1)
+
+    try:
+        schema_manager = SchemaManager(config)
+        effective_url = config.effective_database_url
+        
+        click.echo("🔍 Verifying migration checksums...")
+        
+        verification = schema_manager.verify_migrations(effective_url)
+        
+        if verification['valid']:
+            click.echo("✅ All migrations verified successfully!")
+        else:
+            click.echo("❌ Migration verification failed!")
+            
+            for error in verification['errors']:
+                click.echo(f"   Error: {error}")
+                
+        for warning in verification['warnings']:
+            click.echo(f"   Warning: {warning}")
+            
+        if not verification['valid']:
+            sys.exit(1)
+            
+    except Exception as e:
+        click.echo(f"❌ Verification failed: {e}", err=True)
+        sys.exit(1)
+
+
+@database.command()
+@click.option(
+    "--confirm",
+    is_flag=True,
+    help="Skip confirmation prompt",
+)
+@click.pass_context
+def unlock_migrations(ctx: click.Context, confirm: bool) -> None:
+    """Force unlock the migration system (use with caution)."""
+    config: PoststackConfig = ctx.obj["config"]
+
+    if not config.is_database_configured:
+        click.echo("❌ Database not configured.", err=True)
+        sys.exit(1)
+
+    click.echo("⚠️  This will force unlock the migration system")
+    click.echo("⚠️  Only use this if migrations are stuck due to a crashed process")
+
+    if not confirm:
+        if not click.confirm("Are you sure you want to force unlock?"):
+            click.echo("Unlock cancelled")
+            return
+
+    try:
+        schema_manager = SchemaManager(config)
+        effective_url = config.effective_database_url
+        
+        success = schema_manager.force_unlock_migrations(effective_url)
+        
+        if success:
+            click.echo("✅ Migration system unlocked")
+        else:
+            click.echo("❌ Failed to unlock migration system")
+            sys.exit(1)
+            
+    except Exception as e:
+        click.echo(f"❌ Unlock failed: {e}", err=True)
         sys.exit(1)

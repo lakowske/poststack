@@ -309,18 +309,12 @@ podman run -d \
 
 ## Integration with Poststack
 
-### Liquibase Schema Management
+### Schema Management
 
 ```bash
-# Run Liquibase migrations
-podman run --rm \
-    --network container:poststack-postgres \
-    -v ./changelog:/liquibase/changelog:ro \
-    liquibase-debian:latest \
-    --url="jdbc:postgresql://localhost:5432/poststack" \
-    --username=poststack \
-    --password=secret \
-    update
+# Run schema migrations using poststack CLI
+python -m poststack.cli database create-schema
+python -m poststack.cli database migrate
 ```
 
 ### Connection String

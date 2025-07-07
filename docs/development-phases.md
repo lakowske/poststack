@@ -141,7 +141,7 @@ poststack/
 ### Goals
 - Implement container building following [Core Container Architecture](core-container-architecture.md)
 - Build common base image with debugging tools from Debian slim
-- Create PostgreSQL and Liquibase containers for database scaffolding
+- Create PostgreSQL containers for database scaffolding
 - Test multi-stage build process and layer caching
 
 ### Architecture Reference
@@ -159,9 +159,6 @@ containers/
 ├── postgres/
 │   ├── Dockerfile          # FROM base-debian, PostgreSQL + debugging
 │   └── entrypoint.sh       # Configuration and startup script
-└── liquibase/
-    ├── Dockerfile          # FROM base-debian, Liquibase + PostgreSQL client
-    └── entrypoint.sh       # Schema management script
 ```
 
 ### Core Functions
@@ -185,16 +182,9 @@ containers/
 - **User**: postgres user added to certgroup
 - **Configuration**: Environment-driven via entrypoint script
 
-#### Liquibase Container
-- **Based on**: base-debian:latest
-- **Includes**: Liquibase, PostgreSQL client, debugging utilities
-- **Purpose**: Schema management operations
-- **Configuration**: Database URL and changelog path via environment
-
 ### Testing Criteria
 - [ ] Base Debian image builds successfully with all required tools
 - [ ] PostgreSQL container builds from base image
-- [ ] Liquibase container builds from base image
 - [ ] Build times are measured and reported
 - [ ] Layer caching works correctly (rebuild only changed layers)
 - [ ] Images are properly tagged and accessible
@@ -202,7 +192,7 @@ containers/
 - [ ] Certificate group/user setup works correctly
 
 ### Success Metrics
-- All 3 images (base + postgres + liquibase) build without errors
+- All 2 images (base + postgres) build without errors
 - Build performance shows layer caching benefits
 - Container build framework follows architecture patterns
 - Images include debugging tools for development troubleshooting
@@ -243,7 +233,7 @@ containers/
 
 ### Goals
 - Implement database connectivity and verification using running containers
-- Add Liquibase schema management using Liquibase container
+- Add SQL-based schema management using migration system
 - Create database configuration management
 - Test database operations with containerized PostgreSQL (requires Phase 5 runtime capabilities)
 
@@ -251,7 +241,7 @@ containers/
 ```
 poststack/
 ├── database.py           # Database operations
-├── schema.py            # Schema management with Liquibase
+├── schema.py            # Schema management with SQL migrations
 └── tests/
     ├── test_database.py  # Database connectivity tests
     ├── test_schema.py    # Schema management tests
@@ -261,19 +251,19 @@ poststack/
 ### Core Functions
 - Database URL parsing and validation
 - Connection testing and health checks
-- Liquibase container integration (uses Phase 4 built images + Phase 5 runtime)
+- SQL migration system integration (uses Phase 4 built images + Phase 5 runtime)
 - Schema initialization and updates
 
 ### Testing Criteria
 - [ ] Database connectivity verification works with running PostgreSQL container
-- [ ] Liquibase operations complete successfully using running container
+- [ ] Schema migration operations complete successfully using running container
 - [ ] Schema initialization creates expected tables
 - [ ] Schema updates apply changes correctly
 - [ ] Error handling covers connection failures
 
 ### Success Metrics
 - Database operations work with running PostgreSQL instance
-- Liquibase integration handles schema versioning using running container
+- Schema migration system handles versioning using running container
 - Connection errors provide clear diagnostic information
 - Database state is properly managed and cleaned up
 

@@ -65,7 +65,6 @@ class TestContainerBuilds:
         ("apache", "containers/apache/Dockerfile"),
         ("dovecot", "containers/dovecot/Dockerfile"),
         ("bind", "containers/bind/Dockerfile"),
-        ("liquibase", "containers/liquibase/Dockerfile"),
     ])
     def test_container_build(self, builder, image_name, dockerfile_path):
         """Test individual container build with timing"""
@@ -650,7 +649,6 @@ def container_images():
         ("apache", "containers/apache/Dockerfile"),
         ("dovecot", "containers/dovecot/Dockerfile"),
         ("bind", "containers/bind/Dockerfile"),
-        ("liquibase", "containers/liquibase/Dockerfile"),
     ]
     
     built_images = []
@@ -795,7 +793,6 @@ def performance_expectations():
             "apache": 60.0,     # 1 minute
             "dovecot": 90.0,    # 1.5 minutes
             "bind": 45.0,       # 45 seconds
-            "liquibase": 30.0   # 30 seconds
         },
         "startup_time_limits": {
             "postgres": 30.0,   # 30 seconds
@@ -836,7 +833,6 @@ def build_images_command(args):
         ("apache", "containers/apache/Dockerfile"),
         ("dovecot", "containers/dovecot/Dockerfile"),
         ("bind", "containers/bind/Dockerfile"),
-        ("liquibase", "containers/liquibase/Dockerfile"),
     ]
     
     if args.parallel:

@@ -93,7 +93,7 @@ def get_subprocess_log_file(operation: str, log_dir: str = "logs") -> str:
     Generate timestamped log file path for subprocess operations.
 
     Args:
-        operation: Operation name (e.g., 'container_build', 'liquibase_update')
+        operation: Operation name (e.g., 'container_build', 'migration_update')
         log_dir: Base log directory
 
     Returns:
@@ -105,7 +105,7 @@ def get_subprocess_log_file(operation: str, log_dir: str = "logs") -> str:
     # Determine subdirectory based on operation
     if "container" in operation.lower() or "build" in operation.lower():
         subdir = "containers"
-    elif "database" in operation.lower() or "liquibase" in operation.lower():
+    elif "database" in operation.lower() or "migration" in operation.lower():
         subdir = "database"
     else:
         subdir = ""

@@ -39,7 +39,7 @@ def main():
         
         # Build all Phase 4 images
         print("Building Phase 4 container images...")
-        print("This will build: base-debian, postgres, and liquibase")
+        print("This will build: base-debian and postgres")
         print()
         
         results = builder.build_all_phase4_images(parallel=False)

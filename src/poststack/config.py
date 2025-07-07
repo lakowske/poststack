@@ -89,6 +89,12 @@ class PoststackConfig(BaseSettings):
         description="Allowed IPs for bootstrap access",
     )
 
+    # Migration configuration
+    migrations_path: str = Field(
+        default="./migrations",
+        description="Path to database migration files",
+    )
+
     # Development configuration
     debug: bool = Field(
         default=False,
