@@ -20,8 +20,7 @@ class TestCLIBasics:
         result = runner.invoke(cli, ["--help"])
 
         assert result.exit_code == 0
-        assert "Poststack: Container-based service orchestration" in result.output
-        assert "bootstrap" in result.output
+        assert "Poststack: PostgreSQL container and schema migration management" in result.output
         assert "database" in result.output
 
     def test_cli_version(self):
@@ -97,77 +96,6 @@ class TestCLIBasics:
         assert result.exit_code == 0
 
 
-class TestBootstrapCommands:
-    """Test bootstrap command group."""
-
-    def test_bootstrap_help(self):
-        """Test bootstrap help output."""
-        runner = CliRunner()
-
-        with patch.dict(os.environ, {}, clear=True):
-            result = runner.invoke(cli, ["bootstrap", "--help"])
-
-        assert result.exit_code == 0
-        assert "Bootstrap and initialize Poststack services" in result.output
-        assert "init" in result.output
-        assert "status" in result.output
-
-    def test_bootstrap_status_unconfigured(self):
-        """Test bootstrap status with unconfigured system."""
-        runner = CliRunner()
-
-        with patch.dict(os.environ, {}, clear=True):
-            result = runner.invoke(cli, ["bootstrap", "status"])
-
-        assert result.exit_code == 0
-        assert "Configuration: Incomplete" in result.output
-        assert "Next step: Run 'poststack bootstrap init'" in result.output
-
-    def test_bootstrap_check_system(self):
-        """Test bootstrap system check."""
-        runner = CliRunner()
-
-        with patch.dict(os.environ, {}, clear=True):
-            result = runner.invoke(cli, ["bootstrap", "check-system"])
-
-        # Should pass on most systems
-        assert result.exit_code == 0
-        assert "System check passed!" in result.output
-
-    def test_bootstrap_init_interactive(self, temp_workspace):
-        """Test bootstrap init command with inputs."""
-        runner = CliRunner()
-
-        env_vars = {
-            "POSTSTACK_LOG_DIR": str(temp_workspace / "logs"),
-            "POSTSTACK_CERT_PATH": str(temp_workspace / "certs"),
-        }
-
-        with patch.dict(os.environ, env_vars, clear=True):
-            # Simulate interactive input
-            inputs = [
-                "postgresql://test:pass@localhost:5432/testdb",  # database_url
-                "test.example.com",  # domain_name
-                "admin@test.example.com",  # le_email
-                "podman",  # container_runtime
-            ]
-
-            result = runner.invoke(cli, ["bootstrap", "init"], input="\n".join(inputs))
-
-        assert result.exit_code == 0
-        assert "Poststack initialization complete!" in result.output
-
-        # Check that .env file was created
-        env_file = Path(".env")
-        if env_file.exists():
-            content = env_file.read_text(encoding="utf-8")
-            assert (
-                "POSTSTACK_DATABASE_URL=postgresql://test:pass@localhost:5432/testdb"
-                in content
-            )
-            # Clean up
-            env_file.unlink()
-
 
 class TestDatabaseCommands:
     """Test database command group."""
@@ -224,40 +152,19 @@ class TestDatabaseCommands:
 class TestCLIIntegration:
     """Integration tests for CLI workflows."""
 
-    def test_full_bootstrap_workflow(self, temp_workspace):
-        """Test complete bootstrap workflow."""
+    def test_database_workflow(self, temp_workspace):
+        """Test basic database workflow."""
         runner = CliRunner()
 
         env_vars = {
             "POSTSTACK_LOG_DIR": str(temp_workspace / "logs"),
-            "POSTSTACK_CERT_PATH": str(temp_workspace / "certs"),
         }
 
         with patch.dict(os.environ, env_vars, clear=True):
-            # Step 1: Check initial status
-            result = runner.invoke(cli, ["bootstrap", "status"])
+            # Test database help
+            result = runner.invoke(cli, ["database", "--help"])
             assert result.exit_code == 0
-            assert "Configuration: Incomplete" in result.output
-
-            # Step 2: Run system check
-            result = runner.invoke(cli, ["bootstrap", "check-system"])
-            assert result.exit_code == 0
-
-            # Step 3: Initialize configuration
-            inputs = [
-                "postgresql://test:pass@localhost:5432/testdb",
-                "test.example.com",
-                "admin@test.example.com",
-                "podman",
-            ]
-
-            result = runner.invoke(cli, ["bootstrap", "init"], input="\n".join(inputs))
-            assert result.exit_code == 0
-
-            # Clean up .env file if created
-            env_file = Path(".env")
-            if env_file.exists():
-                env_file.unlink()
+            assert "Manage PostgreSQL database operations" in result.output
 
     def test_cli_error_handling(self):
         """Test CLI error handling."""

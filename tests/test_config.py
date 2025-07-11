@@ -33,7 +33,6 @@ class TestPoststackConfig:
         assert config.log_dir == "logs"
         assert config.verbose is False
         assert config.container_runtime == "podman"
-        assert config.bootstrap_port == 8080
         assert config.debug is False
         assert config.test_mode is False
 
@@ -45,8 +44,6 @@ class TestPoststackConfig:
                 "POSTSTACK_LOG_LEVEL": "DEBUG",
                 "POSTSTACK_VERBOSE": "true",
                 "POSTSTACK_DATABASE_URL": "postgresql://user:pass@localhost:5432/db",
-                "POSTSTACK_DOMAIN_NAME": "example.com",
-                "POSTSTACK_LE_EMAIL": "admin@example.com",
             }
         )
 
@@ -55,8 +52,6 @@ class TestPoststackConfig:
         assert config.log_level == "DEBUG"
         assert config.verbose is True
         assert config.database_url == "postgresql://user:pass@localhost:5432/db"
-        assert config.domain_name == "example.com"
-        assert config.le_email == "admin@example.com"
 
     def test_database_url_validation(self, isolated_test_env):
         """Test database URL validation."""
@@ -105,17 +100,11 @@ class TestPoststackConfig:
         with pytest.raises(ValueError, match="container_runtime must be one of"):
             PoststackConfig(container_runtime="invalid")
 
-    def test_bootstrap_port_validation(self, isolated_test_env):
-        """Test bootstrap port validation."""
-        # Valid ports
-        for port in [1024, 8080, 65535]:
-            config = PoststackConfig(bootstrap_port=port)
-            assert config.bootstrap_port == port
-
-        # Invalid ports
-        for port in [80, 1023, 65536, 100000]:
-            with pytest.raises(ValueError, match="bootstrap_port must be between"):
-                PoststackConfig(bootstrap_port=port)
+    def test_migrations_path_validation(self, isolated_test_env):
+        """Test migrations path validation."""
+        # Valid path
+        config = PoststackConfig(migrations_path="./migrations")
+        assert config.migrations_path == "./migrations"
 
     def test_configuration_properties(self, isolated_test_env):
         """Test configuration property methods."""
@@ -131,40 +120,23 @@ class TestPoststackConfig:
             )
             assert config.is_database_configured
 
-        # Without domain configuration
-        config = PoststackConfig()
-        assert not config.is_domain_configured
-
-        # With partial domain configuration
-        config = PoststackConfig(domain_name="example.com")
-        assert not config.is_domain_configured
-
-        # With complete domain configuration
-        config = PoststackConfig(
-            domain_name="example.com", le_email="admin@example.com"
-        )
-        assert config.is_domain_configured
-
     def test_path_properties(self, isolated_test_env):
         """Test path property methods."""
-        config = PoststackConfig(log_dir="test_logs", cert_path="/custom/certs")
+        config = PoststackConfig(log_dir="test_logs")
 
         assert config.get_log_dir_path() == Path("test_logs")
-        assert config.get_cert_path() == Path("/custom/certs")
 
     def test_create_directories(self, temp_workspace):
         """Test directory creation."""
         log_dir = temp_workspace / "logs"
-        cert_dir = temp_workspace / "certs"
 
-        config = PoststackConfig(log_dir=str(log_dir), cert_path=str(cert_dir))
+        config = PoststackConfig(log_dir=str(log_dir))
 
         config.create_directories()
 
         assert log_dir.exists()
         assert (log_dir / "containers").exists()
         assert (log_dir / "database").exists()
-        assert cert_dir.exists()
 
     def test_mask_sensitive_values(self, isolated_test_env):
         """Test sensitive value masking."""
@@ -253,7 +225,6 @@ class TestConfigurationIntegration:
 POSTSTACK_LOG_LEVEL=DEBUG
 POSTSTACK_VERBOSE=true
 POSTSTACK_DATABASE_URL=postgresql://env:pass@localhost:5432/env_db
-POSTSTACK_DOMAIN_NAME=env.example.com
 """
         env_file.write_text(env_content)
 
@@ -266,7 +237,6 @@ POSTSTACK_DOMAIN_NAME=env.example.com
             assert config.log_level == "DEBUG"
             assert config.verbose is True
             assert config.database_url == "postgresql://env:pass@localhost:5432/env_db"
-            assert config.domain_name == "env.example.com"
 
         finally:
             os.chdir(original_cwd)

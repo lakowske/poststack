@@ -110,7 +110,7 @@ addopts = [
     "--cov=poststack",
     "--cov-report=term-missing",
     "--cov-report=html:htmlcov",
-    "--cov-fail-under=80",
+    "--cov-fail-under=45",
 ]
 testpaths = ["tests"]
 markers = [

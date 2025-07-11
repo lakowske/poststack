@@ -199,7 +199,7 @@ DROP SCHEMA IF EXISTS poststack CASCADE;
             assert result.passed
             assert "verification passed" in result.message
             assert result.details["schema_version"] == "1.0.0"
-            assert len(result.details["tables"]) == 4
+            assert len(result.details["tables"]) == 3
 
     @patch('psycopg2.connect')
     def test_verify_schema_missing_schema(self, mock_connect, schema_manager):
