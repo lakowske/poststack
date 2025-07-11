@@ -1,6 +1,6 @@
 # Configuration
 
-All service configuration is centrally managed in the PostgreSQL database. This provides a single source of truth for container services and enables dynamic configuration updates.
+All poststack configuration is centrally managed in the PostgreSQL database. This provides a single source of truth for the PostgreSQL container and enables dynamic configuration updates.
 
 ## Database Schema
 
@@ -23,36 +23,20 @@ CREATE TABLE poststack.system_info (
 - `database_initialized` - Database initialization status
 - `log_level` - Global logging verbosity (DEBUG, INFO, WARNING, ERROR)
 
-### Service-Specific Tables
-
-#### Services (`services`)
-
-```sql
-CREATE TABLE poststack.services (
-    id SERIAL PRIMARY KEY,
-    name VARCHAR(255) NOT NULL UNIQUE,
-    type VARCHAR(100) NOT NULL,
-    status VARCHAR(50) NOT NULL DEFAULT 'stopped',
-    config JSONB,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-```
+### Container Management Tables
 
 #### Containers (`containers`)
 
 ```sql
 CREATE TABLE poststack.containers (
     id SERIAL PRIMARY KEY,
-    service_id INTEGER NOT NULL,
+    name VARCHAR(255) NOT NULL UNIQUE,
     container_id VARCHAR(255) UNIQUE,
     image VARCHAR(255) NOT NULL,
     status VARCHAR(50) NOT NULL DEFAULT 'created',
     config JSONB,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_containers_service_id FOREIGN KEY (service_id) 
-        REFERENCES poststack.services(id) ON DELETE CASCADE
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
@@ -71,7 +55,6 @@ export POSTSTACK_VERBOSE="false"
 
 # Container Configuration
 export POSTSTACK_CONTAINER_RUNTIME="podman"
-export POSTSTACK_CONTAINER_REGISTRY="localhost"
 
 # Migration Configuration
 export POSTSTACK_MIGRATIONS_PATH="./migrations"

@@ -442,40 +442,40 @@ DROP INDEX IF EXISTS poststack.idx_system_info_key;
 
 ### Example 3: Data Migration
 
-#### `003_add_user_email_verification.sql`
+#### `003_add_user_status.sql`
 
 ```sql
--- Migration: Add email verification to users
+-- Migration: Add user status tracking
 -- Author: poststack
 -- Date: 2025-01-08
--- Description: Add email_verified column and migrate existing data
+-- Description: Add status column and migrate existing data
 
 -- Add new column
 ALTER TABLE poststack.users 
-ADD COLUMN email_verified BOOLEAN DEFAULT FALSE;
+ADD COLUMN status VARCHAR(50) DEFAULT 'active';
 
--- Migrate existing data (assume early users are verified)
+-- Migrate existing data (assume early users are active)
 UPDATE poststack.users 
-SET email_verified = TRUE 
+SET status = 'active' 
 WHERE created_at < '2025-01-01';
 
 -- Add index for queries
-CREATE INDEX idx_users_email_verified ON poststack.users(email_verified);
+CREATE INDEX idx_users_status ON poststack.users(status);
 ```
 
-#### `003_add_user_email_verification.rollback.sql`
+#### `003_add_user_status.rollback.sql`
 
 ```sql
--- Rollback: Remove email verification
+-- Rollback: Remove user status
 -- Author: poststack
 -- Date: 2025-01-08
 
 -- Drop index first
-DROP INDEX IF EXISTS poststack.idx_users_email_verified;
+DROP INDEX IF EXISTS poststack.idx_users_status;
 
 -- Remove column
 ALTER TABLE poststack.users 
-DROP COLUMN email_verified;
+DROP COLUMN status;
 ```
 
 ## Features

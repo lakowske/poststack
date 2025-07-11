@@ -33,7 +33,7 @@ pre-commit install
   ```bash
   pytest tests/
   ```
-- Container changes require both build and runtime tests
+- PostgreSQL and container changes require integration tests
 
 ### Commit Standards
 
@@ -62,10 +62,12 @@ Follow the established project structure:
 
 ```
 poststack/
-├── containers.py      # Shared container management
-├── bootstrap.py       # CLI tool implementation
-├── testing/          # Test utilities and fixtures
-└── docs/             # Project documentation
+├── containers.py          # Container management
+├── cli.py                 # CLI tool implementation
+├── schema_management.py   # Database schema management
+├── config.py             # Configuration management
+├── testing/              # Test utilities and fixtures
+└── docs/                 # Project documentation
 ```
 
 ## Dependencies
