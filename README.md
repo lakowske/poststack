@@ -49,8 +49,8 @@ Poststack features a powerful CLI that handles PostgreSQL container building, da
 ### Container Management
 - **PostgreSQL Container**: Purpose-built PostgreSQL container with health checks
 - **Base Image**: Debian-based foundation with common tools
-- **Project-Level Containers**: Build and manage custom application containers
-- **Lifecycle Management**: Start, stop, remove, status, and health monitoring
+- **Project-Level Containers**: Build and manage custom application containers with full lifecycle support
+- **Lifecycle Management**: Start, stop, remove, status, and health monitoring for all containers
 - **Auto-detection**: Automatically detects running PostgreSQL containers and project containers
 - **Custom Naming**: Configure container names per project for isolation
 
@@ -70,6 +70,10 @@ poststack container build [--image postgres|base-debian|all]
 
 # Build project-level custom containers
 poststack container build-project [--container NAME] [--no-cache]
+
+# Start/stop project containers  
+poststack container start-project [--container NAME] [--port PORT]
+poststack container stop-project [--container NAME] [--all-project]
 
 # Container lifecycle
 poststack container start [--postgres-port PORT]
@@ -147,6 +151,9 @@ echo "POSTSTACK_POSTGRES_HOST_PORT=5434" >> .env
 - **postgres_host_port**: Host port for PostgreSQL container (default: 5432)
 - **migrations_path**: Path to migration files (default: ./migrations)
 - **project_containers_path**: Path to project container definitions (default: ./containers)
+- **project_container_prefix**: Prefix for project container names (auto-detected from directory if empty)
+- **project_container_network**: Network mode for project containers (default: bridge)
+- **project_container_restart_policy**: Restart policy for project containers (default: unless-stopped)
 
 ## Container Customization
 
@@ -459,23 +466,97 @@ $pdo = new PDO("pgsql:host=$host;port=$port;dbname=$dbname", $user, $password);
 4. **Environment files**: Use `.env` files for container configuration
 5. **Build context**: Remember that the build context is your project root, not the container directory
 
+### Container Lifecycle Management
+
+#### Starting Project Containers
+
+```bash
+# Start all discovered project containers with default settings
+poststack container start-project
+
+# Start specific container
+poststack container start-project --container apache
+
+# Start with custom host port
+poststack container start-project --container apache --port 9090
+
+# Start with environment file and volume mounts
+poststack container start-project \
+  --container apache \
+  --env-file .env.production \
+  --volume ./public:/var/www/html \
+  --volume ./logs:/var/log/apache2
+
+# Wait for container to be ready before returning
+poststack container start-project --container apache --wait
+```
+
+#### Stopping Project Containers
+
+```bash
+# Stop specific project container
+poststack container stop-project --container apache
+
+# Stop all project containers
+poststack container stop-project --all-project
+```
+
+#### Container Status and Management
+
+```bash
+# Check status of all containers (includes project containers)
+poststack container status
+
+# Remove project containers
+poststack container remove my-project-apache
+
+# Check container logs
+podman logs my-project-apache
+```
+
+### Container Customization with Environment Variables
+
+You can customize project container behavior using environment variables:
+
+```bash
+# Custom container names
+export POSTSTACK_APACHE_CONTAINER_NAME="my-custom-apache"
+export POSTSTACK_WORKER_CONTAINER_NAME="background-worker"
+
+# Custom ports
+export POSTSTACK_APACHE_PORT="9090"
+export POSTSTACK_API_PORT="8000"
+
+# Container-specific environment variables (passed to container)
+export POSTSTACK_APACHE_ENV_DB_HOST="localhost"
+export POSTSTACK_APACHE_ENV_DB_PORT="5434"
+export POSTSTACK_APACHE_ENV_DEBUG="true"
+
+# Or use .env file
+cat >> .env << EOF
+POSTSTACK_APACHE_CONTAINER_NAME=production-apache
+POSTSTACK_APACHE_PORT=8080
+POSTSTACK_APACHE_ENV_ENVIRONMENT=production
+EOF
+```
+
 ### Container Management Commands
 
 ```bash
-# Discover available project containers
-poststack container build-project --help
+# Build project containers
+poststack container build-project [--container NAME] [--no-cache]
 
-# Build all project containers
-poststack container build-project
+# Start project containers
+poststack container start-project [--container NAME] [--port PORT] [--env-file FILE]
 
-# Build specific container
-poststack container build-project --container apache
+# Stop project containers  
+poststack container stop-project [--container NAME] [--all-project]
 
-# Build without cache
-poststack container build-project --no-cache
+# Check status (includes project containers)
+poststack container status
 
-# List built images (includes project containers)
-podman images | grep "$(basename $(pwd))"
+# Remove containers
+poststack container remove <container_names>
 ```
 
 ## Migration System
