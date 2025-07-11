@@ -2,7 +2,7 @@
 
 ## Overview
 
-Poststack is a Python framework for managing PostgreSQL containers and database schema migrations. It provides a unified CLI for container management and SQL-based schema migration with full rollback support.
+Poststack is a Python framework for managing PostgreSQL containers and database schema migrations. It provides a unified CLI for container management, project-level custom containers, and SQL-based schema migration with full rollback support.
 
 ## Getting Started
 
@@ -49,8 +49,9 @@ Poststack features a powerful CLI that handles PostgreSQL container building, da
 ### Container Management
 - **PostgreSQL Container**: Purpose-built PostgreSQL container with health checks
 - **Base Image**: Debian-based foundation with common tools
+- **Project-Level Containers**: Build and manage custom application containers
 - **Lifecycle Management**: Start, stop, remove, status, and health monitoring
-- **Auto-detection**: Automatically detects running PostgreSQL containers
+- **Auto-detection**: Automatically detects running PostgreSQL containers and project containers
 - **Custom Naming**: Configure container names per project for isolation
 
 ### Schema Migration System
@@ -67,9 +68,12 @@ Poststack features a powerful CLI that handles PostgreSQL container building, da
 # Build container images
 poststack container build [--image postgres|base-debian|all]
 
+# Build project-level custom containers
+poststack container build-project [--container NAME] [--no-cache]
+
 # Container lifecycle
 poststack container start [--postgres-port PORT]
-poststack container stop [--all]
+poststack container stop [--all] [container_names]
 poststack container remove [--force] <container_names>
 poststack container status
 poststack container health
@@ -142,6 +146,7 @@ echo "POSTSTACK_POSTGRES_HOST_PORT=5434" >> .env
 - **postgres_container_name**: Name for PostgreSQL container (default: poststack-postgres)
 - **postgres_host_port**: Host port for PostgreSQL container (default: 5432)
 - **migrations_path**: Path to migration files (default: ./migrations)
+- **project_containers_path**: Path to project container definitions (default: ./containers)
 
 ## Container Customization
 
@@ -205,6 +210,272 @@ echo "POSTSTACK_POSTGRES_HOST_PORT=5434" >> .env
 poststack container start
 
 # Both projects now have isolated PostgreSQL containers on different ports
+```
+
+## Project-Level Custom Containers
+
+Poststack supports project-level custom containers, allowing you to build and manage application-specific containers alongside the PostgreSQL database. This is ideal for web servers, application services, or any custom containers your project needs.
+
+### Setting Up Custom Containers
+
+1. **Create a containers directory** in your project root:
+   ```bash
+   mkdir containers
+   ```
+
+2. **Create container subdirectories** with Dockerfiles:
+   ```bash
+   # Example: Apache web server with PHP
+   mkdir containers/apache
+   cat > containers/apache/Dockerfile << 'EOF'
+   FROM poststack/base-debian:latest
+   
+   # Install Apache and PHP
+   RUN apt-get update && apt-get install -y \
+       apache2 \
+       php8.2 \
+       php8.2-pgsql \
+       php8.2-cli \
+       php8.2-common \
+       && rm -rf /var/lib/apt/lists/*
+   
+   # Copy configuration
+   COPY containers/apache/apache2.conf.template /etc/apache2/apache2.conf.template
+   COPY containers/apache/sites-available/ /etc/apache2/sites-available/
+   COPY containers/apache/entrypoint.sh /entrypoint.sh
+   
+   RUN chmod +x /entrypoint.sh
+   
+   EXPOSE 80
+   ENTRYPOINT ["/entrypoint.sh"]
+   CMD ["apache2ctl", "-D", "FOREGROUND"]
+   EOF
+   ```
+
+3. **Configure container discovery** (optional):
+   ```bash
+   # Set custom containers path in .env (default: ./containers)
+   echo "POSTSTACK_PROJECT_CONTAINERS_PATH=./containers" >> .env
+   ```
+
+### Building Project Containers
+
+Use the `container build-project` command to build your custom containers:
+
+```bash
+# Build all discovered project containers
+poststack container build-project
+
+# Build a specific project container
+poststack container build-project --container apache
+
+# Build with no cache (force rebuild)
+poststack container build-project --no-cache
+```
+
+### Container Discovery
+
+Poststack automatically discovers containers in your `containers/` directory:
+
+- Each subdirectory with a `Dockerfile` becomes a buildable container
+- Container name matches the directory name
+- Image tag follows the pattern: `{project_name}/{container_name}`
+- Build context is the project root directory
+
+Example project structure:
+```
+my-project/
+├── containers/
+│   ├── apache/
+│   │   ├── Dockerfile
+│   │   ├── entrypoint.sh
+│   │   └── config/
+│   ├── worker/
+│   │   ├── Dockerfile
+│   │   └── scripts/
+│   └── redis/
+│       └── Dockerfile
+├── migrations/
+├── .env
+└── README.md
+```
+
+### Example: Full Web Application Stack
+
+Here's a complete example of setting up an Apache web server with PHP and PostgreSQL integration:
+
+1. **Create Apache container configuration**:
+   ```bash
+   mkdir -p containers/apache/sites-available
+   
+   # Main Dockerfile
+   cat > containers/apache/Dockerfile << 'EOF'
+   FROM poststack/base-debian:latest
+   
+   RUN apt-get update && apt-get install -y \
+       apache2 \
+       php8.2 \
+       php8.2-pgsql \
+       php8.2-cli \
+       php8.2-common \
+       gettext-base \
+       && rm -rf /var/lib/apt/lists/*
+   
+   COPY containers/apache/apache2.conf.template /etc/apache2/apache2.conf.template
+   COPY containers/apache/sites-available/ /etc/apache2/sites-available/
+   COPY containers/apache/entrypoint.sh /entrypoint.sh
+   
+   RUN chmod +x /entrypoint.sh && \
+       a2enmod rewrite && \
+       a2dissite 000-default
+   
+   EXPOSE 80
+   ENTRYPOINT ["/entrypoint.sh"]
+   CMD ["apache2ctl", "-D", "FOREGROUND"]
+   EOF
+   
+   # Apache configuration template
+   cat > containers/apache/apache2.conf.template << 'EOF'
+   ServerRoot "/etc/apache2"
+   Listen 80
+   
+   LoadModule authz_core_module modules/mod_authz_core.so
+   LoadModule dir_module modules/mod_dir.so
+   LoadModule mime_module modules/mod_mime.so
+   LoadModule rewrite_module modules/mod_rewrite.so
+   LoadModule php_module modules/libphp8.2.so
+   
+   <Directory />
+       Options FollowSymLinks
+       AllowOverride None
+       Require all denied
+   </Directory>
+   
+   <Directory "/var/www/html">
+       Options Indexes FollowSymLinks
+       AllowOverride All
+       Require all granted
+   </Directory>
+   
+   DirectoryIndex index.php index.html
+   
+   IncludeOptional sites-enabled/*.conf
+   EOF
+   
+   # Site configuration template
+   cat > containers/apache/sites-available/unified.conf.template << 'EOF'
+   <VirtualHost *:80>
+       ServerName localhost
+       DocumentRoot /var/www/html
+       
+       <Directory /var/www/html>
+           AllowOverride All
+           Require all granted
+       </Directory>
+       
+       # Environment variables for database connection
+       SetEnv DB_HOST ${DB_HOST}
+       SetEnv DB_PORT ${DB_PORT}
+       SetEnv DB_NAME ${DB_NAME}
+       SetEnv DB_USER ${DB_USER}
+       SetEnv DB_PASS ${DB_PASS}
+       
+       ErrorLog /var/log/apache2/error.log
+       CustomLog /var/log/apache2/access.log combined
+   </VirtualHost>
+   EOF
+   
+   # Entrypoint script
+   cat > containers/apache/entrypoint.sh << 'EOF'
+   #!/bin/bash
+   set -e
+   
+   # Substitute environment variables in configuration templates
+   envsubst < /etc/apache2/apache2.conf.template > /etc/apache2/apache2.conf
+   envsubst < /etc/apache2/sites-available/unified.conf.template > /etc/apache2/sites-available/unified.conf
+   
+   # Enable the site
+   a2ensite unified.conf
+   
+   # Execute the main command
+   exec "$@"
+   EOF
+   ```
+
+2. **Set up environment variables**:
+   ```bash
+   cat >> .env << 'EOF'
+   # Database connection for Apache container
+   DB_HOST=localhost
+   DB_PORT=5434
+   DB_NAME=poststack
+   DB_USER=poststack
+   DB_PASS=poststack_dev
+   EOF
+   ```
+
+3. **Build and run the stack**:
+   ```bash
+   # Build PostgreSQL container
+   poststack container build
+   
+   # Build project containers
+   poststack container build-project
+   
+   # Start PostgreSQL
+   poststack container start
+   
+   # Run Apache container (manual docker/podman command for now)
+   podman run -d \
+     --name my-project-apache \
+     -p 8080:80 \
+     -v $(pwd)/public:/var/www/html \
+     --env-file .env \
+     my-project/apache
+   ```
+
+### Integration with Database
+
+Your custom containers can easily connect to the Poststack-managed PostgreSQL database:
+
+```php
+<?php
+// Example PHP connection using environment variables
+$host = $_ENV['DB_HOST'] ?? 'localhost';
+$port = $_ENV['DB_PORT'] ?? '5432';
+$dbname = $_ENV['DB_NAME'] ?? 'poststack';
+$user = $_ENV['DB_USER'] ?? 'poststack';
+$password = $_ENV['DB_PASS'] ?? 'poststack_dev';
+
+$pdo = new PDO("pgsql:host=$host;port=$port;dbname=$dbname", $user, $password);
+?>
+```
+
+### Best Practices
+
+1. **Use the base image**: Build from `poststack/base-debian:latest` for consistency
+2. **Template configurations**: Use environment variable substitution for flexible deployments
+3. **Volume mounting**: Mount your application code from the host for development
+4. **Environment files**: Use `.env` files for container configuration
+5. **Build context**: Remember that the build context is your project root, not the container directory
+
+### Container Management Commands
+
+```bash
+# Discover available project containers
+poststack container build-project --help
+
+# Build all project containers
+poststack container build-project
+
+# Build specific container
+poststack container build-project --container apache
+
+# Build without cache
+poststack container build-project --no-cache
+
+# List built images (includes project containers)
+podman images | grep "$(basename $(pwd))"
 ```
 
 ## Migration System
