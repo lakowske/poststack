@@ -6,6 +6,7 @@ containers with health checks, side effects verification, and lifecycle manageme
 """
 
 import logging
+import os
 import socket
 import subprocess
 import time
@@ -502,6 +503,208 @@ class PostgreSQLRunner(ContainerRunner):
 
 
 
+class ProjectContainerRunner(ContainerRunner):
+    """
+    Specialized container runner for project-level custom containers.
+    
+    Provides project container lifecycle management with configurable names,
+    ports, and environment variables.
+    """
+    
+    def __init__(self, config: PoststackConfig, log_handler: Optional[SubprocessLogHandler] = None):
+        """Initialize project container runner."""
+        super().__init__(config, log_handler)
+        
+    def start_project_container(
+        self,
+        container_name: str,
+        image_name: str,
+        port_mappings: Optional[Dict[int, int]] = None,
+        environment: Optional[Dict[str, str]] = None,
+        volumes: Optional[Dict[str, str]] = None,
+        wait_for_ready: bool = False,
+        timeout: int = 60,
+    ) -> RuntimeResult:
+        """
+        Start a project container with custom configuration.
+        
+        Args:
+            container_name: Short name for the container (will be prefixed)
+            image_name: Container image to use
+            port_mappings: Dict of {host_port: container_port}
+            environment: Environment variables for the container
+            volumes: Volume mappings {host_path: container_path}
+            wait_for_ready: Wait for container to be ready
+            timeout: Total timeout for startup
+            
+        Returns:
+            RuntimeResult with container status
+        """
+        # Get full container name with project prefix
+        full_container_name = self.config.get_project_container_name(container_name)
+        
+        # Get container-specific configuration from environment
+        custom_port = self.config.get_project_container_env_var(container_name, 'port')
+        custom_name = self.config.get_project_container_env_var(container_name, 'container_name')
+        
+        # Use custom name if specified
+        if custom_name:
+            full_container_name = custom_name
+            
+        logger.info(f"Starting project container: {full_container_name}")
+        
+        # Prepare default environment
+        container_env = environment or {}
+        
+        # Add project-specific environment variables
+        project_env = {}
+        for key, value in os.environ.items():
+            if key.startswith(f"POSTSTACK_{container_name.upper()}_ENV_"):
+                env_key = key.replace(f"POSTSTACK_{container_name.upper()}_ENV_", "")
+                project_env[env_key] = value
+        
+        container_env.update(project_env)
+        
+        # Prepare port mappings
+        ports = {}
+        if port_mappings:
+            for host_port, container_port in port_mappings.items():
+                # Check for custom port override
+                if custom_port and host_port == list(port_mappings.keys())[0]:
+                    host_port = custom_port
+                ports[str(host_port)] = str(container_port)
+        
+        # Prepare volumes
+        container_volumes = volumes or {}
+        
+        # Start the container
+        result = self.start_container(
+            container_name=full_container_name,
+            image_name=image_name,
+            ports=ports,
+            volumes=container_volumes,
+            environment=container_env,
+            detached=True,
+            remove_on_exit=False,
+            timeout=timeout,
+        )
+        
+        if not result.success:
+            return result
+            
+        # Wait for container to be ready if requested
+        if wait_for_ready:
+            logger.info(f"Waiting for {container_name} to be ready...")
+            ready_result = self.wait_for_container_ready(
+                full_container_name, timeout - 30
+            )
+            
+            if not ready_result.passed:
+                logger.error(f"Container {container_name} failed to become ready: {ready_result.message}")
+                result.status = RuntimeStatus.FAILED
+                result.add_logs(f"Readiness check failed: {ready_result.message}")
+                
+        return result
+    
+    def wait_for_container_ready(
+        self,
+        container_name: str,
+        timeout: int = 30,
+    ) -> HealthCheckResult:
+        """
+        Wait for container to be ready and running.
+        
+        Args:
+            container_name: Name of container
+            timeout: Maximum time to wait
+            
+        Returns:
+            HealthCheckResult indicating readiness status
+        """
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            # Check if container is still running
+            status = self.get_container_status(container_name)
+            if status and status.running:
+                return HealthCheckResult(
+                    container_name=container_name,
+                    check_type="container_ready",
+                    passed=True,
+                    message="Container is running",
+                    response_time=time.time() - start_time,
+                )
+            elif status and not status.running:
+                return HealthCheckResult(
+                    container_name=container_name,
+                    check_type="container_ready",
+                    passed=False,
+                    message=f"Container stopped: {status.status.value}",
+                    response_time=time.time() - start_time,
+                )
+                
+            # Wait before retry
+            time.sleep(2)
+            
+        return HealthCheckResult(
+            container_name=container_name,
+            check_type="container_ready",
+            passed=False,
+            message=f"Container not ready after {timeout} seconds",
+            response_time=time.time() - start_time,
+        )
+    
+    def get_running_project_containers(self) -> List[Dict[str, str]]:
+        """Get information about running project containers."""
+        try:
+            prefix = self.config.get_project_container_prefix()
+            cmd = [
+                self.container_runtime,
+                "ps",
+                "--filter", f"name={prefix}-",
+                "--format", "json"
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            
+            if result.returncode != 0:
+                logger.warning(f"Failed to list project containers: {result.stderr}")
+                return []
+            
+            if not result.stdout.strip():
+                return []
+            
+            import json
+            containers = []
+            
+            # Handle both single object and array responses
+            output = result.stdout.strip()
+            if output.startswith('['):
+                container_list = json.loads(output)
+            else:
+                # Multiple JSON objects, one per line
+                container_list = []
+                for line in output.split('\n'):
+                    if line.strip():
+                        container_list.append(json.loads(line))
+            
+            for container_info in container_list:
+                container_name = container_info.get('Names', [''])[0]
+                if container_name.startswith(prefix + '-'):
+                    containers.append({
+                        'container_name': container_name,
+                        'image': container_info.get('Image', ''),
+                        'status': container_info.get('Status', ''),
+                        'ports': container_info.get('Ports', ''),
+                    })
+            
+            return containers
+            
+        except Exception as e:
+            logger.error(f"Failed to get running project containers: {e}")
+            return []
+
+
 class ContainerLifecycleManager:
     """
     Manages complete container lifecycle including startup, health monitoring, and cleanup.
@@ -513,6 +716,7 @@ class ContainerLifecycleManager:
         """Initialize container lifecycle manager."""
         self.config = config
         self.postgres_runner = PostgreSQLRunner(config)
+        self.project_runner = ProjectContainerRunner(config)
         self.running_containers: List[str] = []
         
     def start_test_environment(

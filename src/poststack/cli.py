@@ -6,7 +6,7 @@ Provides a CLI for managing PostgreSQL containers and database schema migrations
 
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 import click
 
@@ -270,6 +270,217 @@ def container_build_project(
     except Exception as e:
         click.echo(f"❌ Project container build failed: {e}", err=True)
         sys.exit(1)
+
+
+@container.command("start-project")
+@click.option(
+    "--container",
+    help="Specific project container to start (default: all discovered containers)",
+)
+@click.option(
+    "--port",
+    type=int,
+    help="Host port for the container (overrides default port mapping)",
+)
+@click.option(
+    "--env-file",
+    type=click.Path(exists=True, path_type=Path),
+    help="Environment file to load for container",
+)
+@click.option(
+    "--volume",
+    multiple=True,
+    help="Volume mappings in format host_path:container_path",
+)
+@click.option(
+    "--wait",
+    is_flag=True,
+    help="Wait for container to be ready before returning",
+)
+@click.pass_context
+def container_start_project(
+    ctx: click.Context,
+    container: Optional[str],
+    port: Optional[int],
+    env_file: Optional[Path],
+    volume: tuple,
+    wait: bool,
+) -> None:
+    """Start project-level containers."""
+    config = ctx.obj["config"]
+    
+    click.echo("🚀 Starting project containers...")
+    
+    try:
+        # Discover project containers
+        project_containers = discover_project_containers(config)
+        
+        if not project_containers:
+            click.echo(f"No project containers found in {config.project_containers_path}")
+            click.echo("Create a containers/ directory with Dockerfile to define project containers.")
+            return
+        
+        # Filter by specific container if requested
+        if container:
+            if container not in project_containers:
+                click.echo(f"❌ Container '{container}' not found in project containers")
+                click.echo(f"Available containers: {', '.join(project_containers.keys())}")
+                sys.exit(1)
+            containers_to_start = {container: project_containers[container]}
+        else:
+            containers_to_start = project_containers
+        
+        click.echo(f"Found {len(containers_to_start)} project container(s) to start:")
+        for name, info in containers_to_start.items():
+            click.echo(f"  - {name}: {info['description']}")
+        
+        # Start containers
+        lifecycle_manager = ContainerLifecycleManager(config)
+        results = {}
+        
+        # Load environment variables from file if specified
+        env_vars = {}
+        if env_file:
+            env_vars = _load_env_file(env_file)
+        
+        # Parse volume mappings
+        volume_mappings = {}
+        for vol in volume:
+            if ':' in vol:
+                host_path, container_path = vol.split(':', 1)
+                volume_mappings[host_path] = container_path
+        
+        for name, container_info in containers_to_start.items():
+            click.echo(f"\n🔨 Starting {name}...")
+            
+            # Get port mappings
+            port_mappings = container_info["default_port_mappings"]
+            if port and port_mappings:
+                # Override first port mapping with custom port
+                first_container_port = list(port_mappings.values())[0]
+                port_mappings = {port: first_container_port}
+            
+            # Check for container-specific port override
+            custom_port = config.get_project_container_env_var(name, 'port')
+            if custom_port and port_mappings:
+                first_container_port = list(port_mappings.values())[0]
+                port_mappings = {custom_port: first_container_port}
+            
+            # Start the container
+            result = lifecycle_manager.project_runner.start_project_container(
+                container_name=name,
+                image_name=container_info["image"],
+                port_mappings=port_mappings,
+                environment=env_vars,
+                volumes=volume_mappings,
+                wait_for_ready=wait,
+                timeout=120,
+            )
+            results[name] = result
+            
+            if result.success:
+                full_name = config.get_project_container_name(name)
+                click.echo(f"✅ {name} started successfully")
+                click.echo(f"   Container: {full_name}")
+                if port_mappings:
+                    for host_port, container_port in port_mappings.items():
+                        click.echo(f"   Port: {host_port} -> {container_port}")
+            else:
+                click.echo(f"❌ {name} failed to start: {result.logs}")
+        
+        # Display results summary
+        successful = sum(1 for r in results.values() if r.success)
+        click.echo(f"\n🎉 Successfully started {successful}/{len(results)} project container(s)")
+        
+        if successful < len(results):
+            click.echo(f"\n⚠️  {len(results) - successful} container(s) failed to start")
+            sys.exit(1)
+            
+    except Exception as e:
+        click.echo(f"❌ Project container start failed: {e}", err=True)
+        sys.exit(1)
+
+
+@container.command("stop-project")
+@click.option(
+    "--container",
+    help="Specific project container to stop (default: all running project containers)",
+)
+@click.option(
+    "--all-project",
+    is_flag=True,
+    help="Stop all project containers",
+)
+@click.pass_context
+def container_stop_project(
+    ctx: click.Context,
+    container: Optional[str],
+    all_project: bool,
+) -> None:
+    """Stop project-level containers."""
+    config = ctx.obj["config"]
+    
+    try:
+        lifecycle_manager = ContainerLifecycleManager(config)
+        
+        if container:
+            # Stop specific container
+            full_name = config.get_project_container_name(container)
+            click.echo(f"🛑 Stopping project container: {container}")
+            
+            result = lifecycle_manager.project_runner.stop_container(full_name)
+            if result.success:
+                click.echo(f"✅ Stopped {container}")
+            else:
+                click.echo(f"❌ Failed to stop {container}: {result.logs}")
+                sys.exit(1)
+                
+        elif all_project:
+            # Stop all project containers
+            click.echo("🛑 Stopping all project containers...")
+            
+            running_containers = lifecycle_manager.project_runner.get_running_project_containers()
+            if not running_containers:
+                click.echo("No running project containers found")
+                return
+            
+            stopped_count = 0
+            for container_info in running_containers:
+                container_name = container_info['container_name']
+                try:
+                    result = lifecycle_manager.project_runner.stop_container(container_name)
+                    if result.success:
+                        click.echo(f"✅ Stopped {container_name}")
+                        stopped_count += 1
+                    else:
+                        click.echo(f"❌ Failed to stop {container_name}")
+                except Exception as e:
+                    click.echo(f"❌ Error stopping {container_name}: {e}")
+            
+            click.echo(f"\n🎉 Stopped {stopped_count}/{len(running_containers)} project containers")
+        else:
+            click.echo("❓ Please specify --container NAME or --all-project")
+            sys.exit(1)
+            
+    except Exception as e:
+        click.echo(f"❌ Failed to stop project containers: {e}", err=True)
+        sys.exit(1)
+
+
+def _load_env_file(env_file: Path) -> Dict[str, str]:
+    """Load environment variables from file."""
+    env_vars = {}
+    try:
+        with open(env_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    env_vars[key.strip()] = value.strip()
+    except Exception as e:
+        logger.warning(f"Failed to load env file {env_file}: {e}")
+    
+    return env_vars
 
 
 @container.command("list")
@@ -561,8 +772,29 @@ def container_status(ctx: click.Context) -> None:
             else:
                 click.echo(f"❌ {container_name} (not found)")
         
+        # Check project containers
+        project_containers = lifecycle_manager.project_runner.get_running_project_containers()
+        if project_containers:
+            click.echo("\n📦 Project Containers:")
+            click.echo("-" * 50)
+            
+            for container_info in project_containers:
+                container_name = container_info['container_name']
+                status = lifecycle_manager.project_runner.get_container_status(container_name)
+                
+                if status:
+                    status_icon = "✅" if status.running else "⏹️"
+                    click.echo(f"{status_icon} {container_name}")
+                    click.echo(f"   Status: {status.status.value}")
+                    click.echo(f"   Image: {status.image_name}")
+                    click.echo(f"   ID: {status.container_id[:12] if status.container_id else 'N/A'}")
+                    click.echo(f"   Ports: {container_info.get('ports', 'N/A')}")
+                    
+                    if status.running:
+                        running_count += 1
+        
         click.echo("-" * 50)
-        click.echo(f"Running: {running_count} containers")
+        click.echo(f"Running: {running_count} total containers")
         
     except Exception as e:
         click.echo(f"❌ Failed to get container status: {e}", err=True)

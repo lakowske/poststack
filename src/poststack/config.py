@@ -76,6 +76,20 @@ class PoststackConfig(BaseSettings):
         default="./containers",
         description="Path to project-specific container definitions",
     )
+    
+    # Project container configuration - containers will be prefixed with project name
+    project_container_prefix: str = Field(
+        default="",
+        description="Prefix for project container names (auto-detected from directory if empty)",
+    )
+    project_container_network: str = Field(
+        default="bridge",
+        description="Network mode for project containers",
+    )
+    project_container_restart_policy: str = Field(
+        default="unless-stopped",
+        description="Restart policy for project containers",
+    )
 
 
     # Migration configuration
@@ -158,6 +172,41 @@ class PoststackConfig(BaseSettings):
             return self.database_url
         
         return self.get_auto_detected_database_url()
+    
+    def get_project_container_prefix(self) -> str:
+        """Get the effective project container prefix."""
+        if self.project_container_prefix:
+            return self.project_container_prefix
+        
+        # Auto-detect from current directory name
+        import os
+        return os.path.basename(os.getcwd())
+    
+    def get_project_container_name(self, container_name: str) -> str:
+        """Get the full container name for a project container."""
+        prefix = self.get_project_container_prefix()
+        return f"{prefix}-{container_name}"
+    
+    def get_project_container_env_var(self, container_name: str, setting: str, default: any = None) -> any:
+        """Get environment variable for specific project container settings."""
+        # Look for container-specific environment variable
+        # Format: POSTSTACK_<CONTAINER>_<SETTING>
+        env_var_name = f"POSTSTACK_{container_name.upper()}_{setting.upper()}"
+        
+        value = os.getenv(env_var_name)
+        if value is not None:
+            # Convert string values to appropriate types
+            if setting.endswith('_port') or setting == 'port':
+                try:
+                    return int(value)
+                except ValueError:
+                    logger.warning(f"Invalid port value for {env_var_name}: {value}")
+                    return default
+            elif setting in ['enabled', 'auto_start']:
+                return value.lower() in ('true', '1', 'yes', 'on')
+            return value
+        
+        return default
 
     def get_log_dir_path(self) -> Path:
         """Get log directory as Path object."""
