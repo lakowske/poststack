@@ -1,123 +1,190 @@
 # Configuration
 
-All service configuration is centrally managed in the PostgreSQL database. This provides a single source of truth for all container services and enables dynamic configuration updates.
+All service configuration is centrally managed in the PostgreSQL database. This provides a single source of truth for container services and enables dynamic configuration updates.
 
 ## Database Schema
 
-### Core Configuration Table (`config`)
+### Core Configuration Table (`system_info`)
 
 ```sql
-CREATE TABLE config (
-    key VARCHAR(255) PRIMARY KEY,
-    value TEXT NOT NULL,
-    description TEXT,
-    service VARCHAR(100),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+CREATE TABLE poststack.system_info (
+    id SERIAL PRIMARY KEY,
+    key VARCHAR(255) NOT NULL UNIQUE,
+    value TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
 ### Required Configuration Items
 
-- `domain_name` - Primary domain for all services
-- `le_email` - Let's Encrypt notification email
-- `cert_path` - Override path for certificates (default: `/data/certificates`)
+- `schema_version` - Current schema version
+- `poststack_version` - Poststack version that created the schema
+- `database_initialized` - Database initialization status
 - `log_level` - Global logging verbosity (DEBUG, INFO, WARNING, ERROR)
 
 ### Service-Specific Tables
 
-#### Domains (`domains`)
-
-```sql
-CREATE TABLE domains (
-    id SERIAL PRIMARY KEY,
-    domain VARCHAR(255) UNIQUE NOT NULL,
-    type VARCHAR(50) NOT NULL, -- 'primary', 'alias', 'subdomain'
-    parent_domain_id INTEGER REFERENCES domains(id),
-    ssl_enabled BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
 #### Services (`services`)
 
 ```sql
-CREATE TABLE services (
+CREATE TABLE poststack.services (
     id SERIAL PRIMARY KEY,
-    name VARCHAR(100) UNIQUE NOT NULL,
-    enabled BOOLEAN DEFAULT TRUE,
-    container_name VARCHAR(255),
-    port INTEGER,
-    health_check_url VARCHAR(255),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    name VARCHAR(255) NOT NULL UNIQUE,
+    type VARCHAR(100) NOT NULL,
+    status VARCHAR(50) NOT NULL DEFAULT 'stopped',
+    config JSONB,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
-#### Service Configuration (`service_config`)
+#### Containers (`containers`)
 
 ```sql
-CREATE TABLE service_config (
+CREATE TABLE poststack.containers (
     id SERIAL PRIMARY KEY,
-    service_id INTEGER REFERENCES services(id),
-    key VARCHAR(255) NOT NULL,
-    value TEXT NOT NULL,
-    UNIQUE(service_id, key)
+    service_id INTEGER NOT NULL,
+    container_id VARCHAR(255) UNIQUE,
+    image VARCHAR(255) NOT NULL,
+    status VARCHAR(50) NOT NULL DEFAULT 'created',
+    config JSONB,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_containers_service_id FOREIGN KEY (service_id) 
+        REFERENCES poststack.services(id) ON DELETE CASCADE
 );
 ```
 
-#### Users (`users`)
+## Environment Variables
 
-```sql
-CREATE TABLE users (
-    id SERIAL PRIMARY KEY,
-    username VARCHAR(100) UNIQUE NOT NULL,
-    email VARCHAR(255) UNIQUE NOT NULL,
-    password_hash VARCHAR(255) NOT NULL,
-    enabled BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-#### User Permissions (`user_permissions`)
-
-```sql
-CREATE TABLE user_permissions (
-    id SERIAL PRIMARY KEY,
-    user_id INTEGER REFERENCES users(id),
-    service_id INTEGER REFERENCES services(id),
-    permission VARCHAR(50) NOT NULL, -- 'admin', 'user', 'readonly'
-    UNIQUE(user_id, service_id)
-);
-```
-
-## Configuration Access
-
-Services access configuration through environment variables populated from the database at container startup:
-
-1. **Base configuration** - Common settings loaded for all services
-2. **Service-specific configuration** - Additional settings per service
-3. **Dynamic updates** - Services can watch for configuration changes
-
-### Example Service Startup
+Poststack supports configuration through environment variables:
 
 ```bash
-# Configuration is injected as environment variables
-DOMAIN_NAME=example.com
-LE_EMAIL=admin@example.com
-SERVICE_PORT=8080
-# ... additional service-specific config
+# Database Configuration
+export POSTSTACK_DATABASE_URL="postgresql://user:password@localhost:5432/poststack"
+
+# Logging Configuration
+export POSTSTACK_LOG_LEVEL="INFO"
+export POSTSTACK_LOG_DIR="logs"
+export POSTSTACK_VERBOSE="false"
+
+# Container Configuration
+export POSTSTACK_CONTAINER_RUNTIME="podman"
+export POSTSTACK_CONTAINER_REGISTRY="localhost"
+
+# Migration Configuration
+export POSTSTACK_MIGRATIONS_PATH="./migrations"
+
+# Development Configuration
+export POSTSTACK_DEBUG="false"
+export POSTSTACK_TEST_MODE="false"
 ```
 
-## Configuration Management API
+## Configuration File
 
-A Python-based API manages all configuration:
+Poststack supports YAML configuration files:
 
-```python
-# Example usage
-from poststack.config import ConfigManager
+```yaml
+# config.yaml
+database_url: "postgresql://user:password@localhost:5432/poststack"
+log_level: "INFO"
+log_dir: "logs"
+verbose: false
+container_runtime: "podman"
+migrations_path: "./migrations"
+debug: false
+test_mode: false
+```
 
-config = ConfigManager()
-config.set('domain_name', 'example.com')
-config.get_service_config('apache')
-config.update_user_permissions('john', 'mail', 'admin')
+Use with:
+```bash
+poststack --config-file config.yaml [command]
+```
+
+## CLI Configuration
+
+Configuration can be overridden via CLI options:
+
+```bash
+# Override database URL
+poststack --database-url "postgresql://user:pass@host:5432/db" [command]
+
+# Override log level
+poststack --log-level DEBUG [command]
+
+# Override log directory
+poststack --log-dir /custom/logs [command]
+
+# Enable verbose output
+poststack --verbose [command]
+```
+
+## Configuration Priority
+
+Configuration is loaded in this order (highest to lowest priority):
+
+1. CLI arguments
+2. Environment variables
+3. Configuration file (if specified)
+4. Default values
+
+## Database Auto-Detection
+
+Poststack can automatically detect running PostgreSQL containers:
+
+```bash
+# Auto-detect and connect to running PostgreSQL
+poststack database test-connection
+```
+
+Auto-detection looks for:
+- Containers with names matching `poststack-postgres*`
+- Containers running PostgreSQL images
+- Standard PostgreSQL ports (5432, 5433)
+
+## Validation
+
+Validate your configuration:
+
+```bash
+poststack config-validate
+```
+
+This checks:
+- Database connectivity
+- Required tables exist
+- Schema version compatibility
+- Log directory permissions
+
+## Troubleshooting
+
+### Database Connection Issues
+
+```bash
+# Test database connection
+poststack database test-connection
+
+# Check auto-detected database
+poststack config-show
+```
+
+### Configuration Conflicts
+
+```bash
+# Show effective configuration
+poststack config-show
+
+# Show configuration sources
+poststack --verbose config-show
+```
+
+### Log Configuration
+
+```bash
+# Check log directory
+poststack logs list
+
+# Clean old logs
+poststack logs clean --days 7
 ```

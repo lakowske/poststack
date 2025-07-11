@@ -340,15 +340,15 @@ class TestContainerIntegration:
         assert stop_result.status == RuntimeStatus.STOPPED
 
     def test_multi_service_deployment(self, test_config, temp_workspace):
-        """Test deploying multiple services."""
+        """Test deploying PostgreSQL service."""
         service = MockContainerService(test_config)
 
-        # Build images for multiple services
+        # Build images for PostgreSQL service
         build_results = service.build_service_images(
-            ["postgresql", "apache", "dovecot"]
+            ["postgresql"]
         )
 
-        assert len(build_results) == 3
+        assert len(build_results) == 1
         assert all(r.success for r in build_results.values())
 
         # Start containers
@@ -357,23 +357,16 @@ class TestContainerIntegration:
                 "ports": {"5432": "5432"},
                 "environment": {"POSTGRES_DB": "testdb"},
             },
-            "apache": {
-                "ports": {"80": "80", "443": "443"},
-                "volumes": {"/tmp/web": "/var/www/html"},
-            },
-            "dovecot": {
-                "ports": {"143": "143", "993": "993"},
-            },
         }
 
         runtime_results = service.start_service_containers(service_specs)
 
-        assert len(runtime_results) == 3
+        assert len(runtime_results) == 1
         assert all(r.running for r in runtime_results.values())
 
         # Health checks
         health_results = service.health_check_all()
-        assert len(health_results) == 3
+        assert len(health_results) == 1
         assert all(r.passed for r in health_results.values())
 
         # Cleanup

@@ -16,7 +16,3 @@ DROP INDEX IF EXISTS poststack.idx_containers_service_id;
 DROP INDEX IF EXISTS poststack.idx_containers_status;
 DROP INDEX IF EXISTS poststack.idx_containers_container_id;
 
--- Drop certificates indexes
-DROP INDEX IF EXISTS poststack.idx_certificates_domain;
-DROP INDEX IF EXISTS poststack.idx_certificates_status;
-DROP INDEX IF EXISTS poststack.idx_certificates_expires_at;

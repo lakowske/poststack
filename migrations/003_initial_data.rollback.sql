@@ -5,7 +5,7 @@
 
 -- Remove default services
 DELETE FROM poststack.services 
-WHERE name IN ('postgresql', 'apache', 'dovecot', 'bind', 'certbot');
+WHERE name IN ('postgresql');
 
 -- Remove system information
 DELETE FROM poststack.system_info 

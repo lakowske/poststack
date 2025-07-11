@@ -179,7 +179,7 @@ DROP SCHEMA IF EXISTS poststack CASCADE;
             ("1.0.0",),  # schema version
         ]
         mock_cursor.fetchall.side_effect = [
-            [("system_info",), ("services",), ("containers",), ("certificates",)],  # required tables
+            [("system_info",), ("services",), ("containers",)],  # required tables
             [("schema_migrations",), ("schema_migration_lock",)],  # migration tables
         ]
         mock_conn.cursor.return_value = mock_cursor

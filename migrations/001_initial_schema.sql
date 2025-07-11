@@ -40,14 +40,3 @@ CREATE TABLE poststack.containers (
         REFERENCES poststack.services(id) ON DELETE CASCADE
 );
 
--- Create certificates table
-CREATE TABLE poststack.certificates (
-    id SERIAL PRIMARY KEY,
-    domain VARCHAR(255) NOT NULL UNIQUE,
-    status VARCHAR(50) NOT NULL DEFAULT 'pending',
-    cert_path TEXT,
-    key_path TEXT,
-    expires_at TIMESTAMP,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-);

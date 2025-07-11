@@ -207,7 +207,7 @@ class SchemaManager:
                 )
             
             # Check required tables exist
-            required_tables = ['system_info', 'services', 'containers', 'certificates']
+            required_tables = ['system_info', 'services', 'containers']
             cursor.execute("""
                 SELECT table_name 
                 FROM information_schema.tables 

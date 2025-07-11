@@ -65,29 +65,6 @@ class PoststackConfig(BaseSettings):
         description="Container registry for built images",
     )
 
-    # Certificate configuration
-    domain_name: Optional[str] = Field(
-        default=None,
-        description="Primary domain name for services",
-    )
-    le_email: Optional[str] = Field(
-        default=None,
-        description="Let's Encrypt notification email",
-    )
-    cert_path: str = Field(
-        default="certificates",
-        description="Path for certificate storage",
-    )
-
-    # Bootstrap configuration
-    bootstrap_port: int = Field(
-        default=8080,
-        description="Port for bootstrap web interface (if used)",
-    )
-    bootstrap_allowed_ips: list[str] = Field(
-        default=["127.0.0.1", "::1"],
-        description="Allowed IPs for bootstrap access",
-    )
 
     # Migration configuration
     migrations_path: str = Field(
@@ -136,23 +113,12 @@ class PoststackConfig(BaseSettings):
 
         return v
 
-    @validator("bootstrap_port")
-    def validate_bootstrap_port(cls, v: int) -> int:
-        """Validate bootstrap port is in valid range."""
-        if not (1024 <= v <= 65535):
-            raise ValueError("bootstrap_port must be between 1024 and 65535")
-        return v
 
     @property
     def is_database_configured(self) -> bool:
         """Check if database is configured (explicitly or auto-detected)."""
         return self.database_url is not None or self.get_auto_detected_database_url() is not None
 
-    @property
-    def is_domain_configured(self) -> bool:
-        """Check if domain is configured."""
-        return self.domain_name is not None and self.le_email is not None
-    
     def get_auto_detected_database_url(self) -> Optional[str]:
         """Auto-detect database URL from running PostgreSQL containers."""
         try:
@@ -185,9 +151,6 @@ class PoststackConfig(BaseSettings):
         """Get log directory as Path object."""
         return Path(self.log_dir)
 
-    def get_cert_path(self) -> Path:
-        """Get certificate directory as Path object."""
-        return Path(self.cert_path)
 
     def create_directories(self) -> None:
         """Create necessary directories if they don't exist."""
@@ -196,10 +159,6 @@ class PoststackConfig(BaseSettings):
         log_path.mkdir(exist_ok=True)
         (log_path / "containers").mkdir(exist_ok=True)
         (log_path / "database").mkdir(exist_ok=True)
-
-        # Create certificate directory
-        cert_path = self.get_cert_path()
-        cert_path.mkdir(exist_ok=True, parents=True)
 
     def mask_sensitive_values(self) -> dict[str, str]:
         """Get configuration dict with sensitive values masked."""

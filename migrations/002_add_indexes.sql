@@ -16,7 +16,3 @@ CREATE INDEX idx_containers_service_id ON poststack.containers(service_id);
 CREATE INDEX idx_containers_status ON poststack.containers(status);
 CREATE INDEX idx_containers_container_id ON poststack.containers(container_id);
 
--- Certificates indexes
-CREATE INDEX idx_certificates_domain ON poststack.certificates(domain);
-CREATE INDEX idx_certificates_status ON poststack.certificates(status);
-CREATE INDEX idx_certificates_expires_at ON poststack.certificates(expires_at);

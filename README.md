@@ -1,122 +1,249 @@
-Poststack
+# Poststack
 
-# Overview
+## Overview
 
-Poststack coordinates a set of servers (e.g. postgres, apache, dovecot/postfix, bind, nginx, etc...). It uses Python and Postgres to manage configuration
-such as users, passwords and other configuration.
+Poststack is a Python framework for managing PostgreSQL containers and database schema migrations. It provides a unified CLI for container management and SQL-based schema migration with full rollback support.
 
-# Getting Started
+## Getting Started
 
-Poststack features a powerful CLI bootstrap tool that handles container image building, database setup, and schema management. All operations are logged for transparency and debugging.
+Poststack features a powerful CLI that handles PostgreSQL container building, database setup, and schema management. All operations are logged for transparency and debugging.
 
-## Quick Start
+### Quick Start
 
 1. **Install Prerequisites**
    - Python 3.9+
    - Podman (or Docker)
    - PostgreSQL client tools (optional)
 
-2. **Run the Bootstrap CLI**
+2. **Install Poststack**
    ```bash
-   # Full setup process (recommended for first-time setup)
-   python poststack-bootstrap.py setup --build-images --url "postgresql://user:password@localhost:5432/poststack"
-   
-   # Or run individual commands
-   python poststack-bootstrap.py build-images
-   python poststack-bootstrap.py verify-db --url "postgresql://user:password@localhost:5432/poststack"
-   python poststack-bootstrap.py init-schema --url "postgresql://user:password@localhost:5432/poststack"
+   pip install poststack
    ```
 
-3. **Monitor Progress**
+3. **Build and Start PostgreSQL Container**
+   ```bash
+   # Build PostgreSQL container image
+   poststack container build
+   
+   # Start PostgreSQL container
+   poststack container start --postgres-port 5433
+   ```
+
+4. **Initialize Database Schema**
+   ```bash
+   # Initialize database schema
+   poststack database create-schema --url "postgresql://poststack:poststack_dev@localhost:5433/poststack"
+   
+   # Run migrations
+   poststack database migrate --url "postgresql://poststack:poststack_dev@localhost:5433/poststack"
+   ```
+
+5. **Monitor Progress**
    - All operations log progress to stdout/stderr
    - Detailed logs are written to the `logs/` directory
    - Container builds logged to `logs/containers/`
    - Database operations logged to `logs/database/`
 
-4. **Start the Server**
-   ```bash
-   # After bootstrap completes
-   python poststack.py
-   ```
+## Core Features
 
-5. **Configure Your Services**
-   - Access the web interface at http://localhost:8000
-   - Configure your domain and services
-   - Enable the services you need (Apache, Mail, DNS, etc.)
-   - All configuration is stored centrally in PostgreSQL
+### Container Management
+- **PostgreSQL Container**: Purpose-built PostgreSQL container with health checks
+- **Base Image**: Debian-based foundation with common tools
+- **Lifecycle Management**: Start, stop, status, and health monitoring
+- **Auto-detection**: Automatically detects running PostgreSQL containers
 
-## Bootstrap CLI Commands
+### Schema Migration System
+- **SQL-based**: Pure SQL migrations with full rollback support
+- **Version Control**: Track applied migrations and schema versions
+- **Rollback Support**: Roll back individual migrations or to specific versions
+- **Validation**: Comprehensive schema validation and health checks
+- **Locking**: Migration locks prevent concurrent schema changes
 
-The bootstrap CLI provides individual commands for different operations:
+### CLI Commands
 
-### Image Building
+#### Container Commands
 ```bash
-# Build all container images
-python poststack-bootstrap.py build-images
+# Build container images
+poststack container build [--image postgres|base-debian|all]
 
-# Build images in parallel (faster)
-python poststack-bootstrap.py build-images --parallel
+# Container lifecycle
+poststack container start [--postgres-port 5433]
+poststack container stop [--all]
+poststack container status
+poststack container health
+
+# Management
+poststack container list
+poststack container clean
 ```
 
-### Database Operations
+#### Database Commands
 ```bash
-# Verify database connectivity
-python poststack-bootstrap.py verify-db --url "postgresql://user:password@localhost:5432/poststack"
+# Schema management
+poststack database create-schema
+poststack database show-schema
+poststack database drop-schema
 
-# Initialize empty database schema
-python poststack-bootstrap.py init-schema --url "postgresql://user:password@localhost:5432/poststack"
+# Migration management
+poststack database migrate [--target-version VERSION]
+poststack database rollback [--target-version VERSION]
+poststack database migration-status
+poststack database verify-migrations
+poststack database unlock-migrations
 
-# Update existing database schema
-python poststack-bootstrap.py update-schema --url "postgresql://user:password@localhost:5432/poststack"
+# Operations
+poststack database test-connection
+poststack database backup
 ```
 
-### Full Setup
+#### Utility Commands
 ```bash
-# Complete bootstrap process
-python poststack-bootstrap.py setup --build-images --url "postgresql://user:password@localhost:5432/poststack"
+# Configuration
+poststack config-show
+poststack config-validate
+
+# Logs
+poststack logs list [--category main|container|database]
+poststack logs clean [--days 7]
+poststack logs size
+
+# Version
+poststack version
 ```
 
-## Environment Variables
+## Configuration
 
-For automated deployments, you can use environment variables instead of command-line arguments:
+Poststack uses environment variables and configuration files for setup:
 
 ```bash
-# Set database URL
-export DATABASE_URL="postgresql://user:password@localhost:5432/poststack"
+# Environment variables
+export POSTSTACK_DATABASE_URL="postgresql://user:password@localhost:5432/poststack"
+export POSTSTACK_LOG_LEVEL="INFO"
+export POSTSTACK_CONTAINER_RUNTIME="podman"
 
-# Run bootstrap commands (DATABASE_URL will be used automatically)
-python poststack-bootstrap.py build-images
-python poststack-bootstrap.py verify-db
-python poststack-bootstrap.py init-schema
-
-# Or run full setup
-python poststack-bootstrap.py setup --build-images
-
-# Start the server
-python poststack.py
+# Or use configuration file
+poststack --config-file config.yaml command
 ```
 
-## Next Steps
+### Configuration Options
 
-After bootstrap completes successfully:
+- **database_url**: PostgreSQL connection URL
+- **log_level**: Logging level (DEBUG, INFO, WARNING, ERROR)
+- **log_dir**: Directory for log files (default: logs)
+- **container_runtime**: Container runtime (podman or docker)
+- **migrations_path**: Path to migration files (default: ./migrations)
 
-1. **Start the main server**: `python poststack.py`
-2. **Access the web interface**: http://localhost:8000
-3. **Configure your domain**: Set your primary domain and Let's Encrypt email
-4. **Enable services**: Turn on the services you need (Apache, Mail, DNS, etc.)
-5. **Deploy containers**: Use the generated configurations to deploy your services
+## Migration System
 
-## Logging and Debugging
+### Creating Migrations
 
-All bootstrap operations create detailed logs:
+Migrations are SQL files in the `migrations/` directory:
 
-- **Console Output**: Progress and summary information
-- **Main Logs**: `logs/bootstrap_YYYYMMDD_HHMMSS.log`
-- **Container Builds**: `logs/containers/[image]_build_YYYYMMDD_HHMMSS.log`
-- **Database Operations**: `logs/database/schema_[operation]_YYYYMMDD_HHMMSS.log`
+```sql
+-- migrations/004_add_user_table.sql
+CREATE TABLE poststack.users (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(255) NOT NULL UNIQUE,
+    email VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
 
-Use `--verbose` flag for more detailed console output.
+### Rollback Files
 
-For detailed configuration options, see [Configuration Documentation](docs/configuration.md).
-For architectural details, see [Core Architecture](docs/core-container-architecture.md).
-For bootstrap implementation details, see [Bootstrap CLI Documentation](docs/bootstrap.md).
+Each migration should have a corresponding rollback file:
+
+```sql
+-- migrations/004_add_user_table.rollback.sql
+DROP TABLE IF EXISTS poststack.users;
+```
+
+### Migration Commands
+
+```bash
+# Apply all pending migrations
+poststack database migrate
+
+# Apply migrations up to specific version
+poststack database migrate --target-version 004
+
+# Rollback to specific version
+poststack database rollback --target-version 003
+
+# Show migration status
+poststack database migration-status
+```
+
+## Development
+
+### Prerequisites
+
+- Python 3.9+
+- Poetry or pip
+- Podman/Docker
+- PostgreSQL (for testing)
+
+### Setup
+
+```bash
+# Clone repository
+git clone https://github.com/your-org/poststack.git
+cd poststack
+
+# Install dependencies
+pip install -e .
+
+# Build containers
+poststack container build
+
+# Run tests
+pytest tests/
+```
+
+### Testing
+
+```bash
+# Run all tests
+pytest
+
+# Run with coverage
+pytest --cov=poststack
+
+# Run specific test categories
+pytest tests/test_database.py
+pytest tests/test_schema.py
+```
+
+## Architecture
+
+### Components
+
+1. **CLI Layer**: Click-based command-line interface
+2. **Container Management**: Podman/Docker container lifecycle
+3. **Database Layer**: PostgreSQL connection and operations
+4. **Schema Management**: SQL-based migration system
+5. **Configuration**: Pydantic-based configuration management
+6. **Logging**: Structured logging with file rotation
+
+### Database Schema
+
+Poststack uses these core tables:
+
+- `system_info`: System metadata and configuration
+- `services`: Service definitions and status
+- `containers`: Container instance tracking
+- `schema_migrations`: Migration history and status
+
+## License
+
+[License information]
+
+## Contributing
+
+[Contributing guidelines]
+
+## Support
+
+For support and questions:
+- GitHub Issues: [Repository issues]
+- Documentation: [Documentation URL]

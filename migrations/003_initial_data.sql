@@ -12,8 +12,4 @@ INSERT INTO poststack.system_info (key, value) VALUES
 
 -- Insert default service configurations
 INSERT INTO poststack.services (name, type, status, config) VALUES
-    ('postgresql', 'database', 'configured', '{"image": "poststack/postgres", "port": 5432}'),
-    ('apache', 'web', 'configured', '{"image": "poststack/apache", "ports": [80, 443]}'),
-    ('dovecot', 'mail', 'configured', '{"image": "poststack/dovecot", "ports": [143, 993, 110, 995]}'),
-    ('bind', 'dns', 'configured', '{"image": "poststack/bind", "ports": [53]}'),
-    ('certbot', 'certificate', 'configured', '{"image": "poststack/certbot", "schedule": "0 12 * * *"}');
+    ('postgresql', 'database', 'configured', '{"image": "poststack/postgres", "port": 5432}');

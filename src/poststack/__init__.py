@@ -1,8 +1,7 @@
 """
-Poststack: Container-based service orchestration
+Poststack: PostgreSQL container and schema migration management
 
-A Python framework for managing containerized services including
-PostgreSQL, Apache, Dovecot, BIND, and certificate management.
+A Python framework for managing PostgreSQL containers and database schema migrations.
 """
 
 __version__ = "0.1.0"

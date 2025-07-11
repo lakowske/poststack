@@ -2,7 +2,7 @@
 Container management commands for Poststack
 
 Handles container building, running, and lifecycle management
-for PostgreSQL, Apache, Dovecot, BIND, and certificate services.
+for PostgreSQL database containers.
 """
 
 import logging
@@ -28,34 +28,6 @@ POSTSTACK_SERVICES = {
         "dockerfile": "containers/postgresql/Dockerfile",
         "ports": ["5432:5432"],
         "volumes": ["poststack_postgres_data:/var/lib/postgresql/data"],
-    },
-    "apache": {
-        "description": "Apache HTTP server with PHP",
-        "image": "poststack/apache",
-        "dockerfile": "containers/apache/Dockerfile",
-        "ports": ["80:80", "443:443"],
-        "volumes": ["poststack_web_data:/var/www/html"],
-    },
-    "dovecot": {
-        "description": "Dovecot IMAP/POP3 server",
-        "image": "poststack/dovecot",
-        "dockerfile": "containers/dovecot/Dockerfile",
-        "ports": ["143:143", "993:993", "110:110", "995:995"],
-        "volumes": ["poststack_mail_data:/var/mail"],
-    },
-    "bind": {
-        "description": "BIND DNS server",
-        "image": "poststack/bind",
-        "dockerfile": "containers/bind/Dockerfile",
-        "ports": ["53:53/udp", "53:53/tcp"],
-        "volumes": ["poststack_dns_data:/etc/bind"],
-    },
-    "certbot": {
-        "description": "Let's Encrypt certificate manager",
-        "image": "poststack/certbot",
-        "dockerfile": "containers/certbot/Dockerfile",
-        "ports": [],
-        "volumes": ["poststack_cert_data:/etc/letsencrypt"],
     },
 }
 
@@ -281,7 +253,7 @@ def list(ctx: click.Context, service: Optional[str]) -> None:
                     "--filter",
                     f"ancestor={image_name}",
                     "--format",
-                    "table {{.Names}}\\t{{.Status}}",
+                    "table {{.Names}}\t{{.Status}}",
                 ],
                 capture_output=True,
                 text=True,
@@ -528,7 +500,7 @@ def status(ctx: click.Context) -> None:
                 "--filter",
                 "name=poststack-",
                 "--format",
-                "table {{.Names}}\\t{{.Image}}\\t{{.Status}}\\t{{.Ports}}",
+                "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}",
             ],
             capture_output=True,
             text=True,

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "poststack"
 version = "0.1.0"
-description = "Container-based service orchestration for mail, web, DNS, and certificate management"
+description = "PostgreSQL container management with SQL-based schema migration"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
@@ -23,7 +23,8 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: System :: Systems Administration",
-    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+    "Topic :: Database :: Database Engines/Servers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 requires-python = ">=3.9"
 dependencies = [

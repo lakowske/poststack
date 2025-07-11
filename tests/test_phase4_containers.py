@@ -280,17 +280,6 @@ class TestPhase4Integration:
         assert "FROM poststack/base-debian:latest" in postgres_dockerfile
         
     
-    def test_certificate_group_setup(self):
-        """Test that certificate group setup is consistent."""
-        base_dockerfile = Path("containers/base-debian/Dockerfile").read_text()
-        
-        # Check certgroup and certuser creation
-        assert "groupadd -g 9999 certgroup" in base_dockerfile
-        assert "useradd -u 9999 -g certgroup" in base_dockerfile
-        
-        # Check that service images add users to certgroup
-        postgres_dockerfile = Path("containers/postgres/Dockerfile").read_text()
-        assert "usermod -a -G certgroup postgres" in postgres_dockerfile
     
     def test_standard_environment_variables(self):
         """Test that standard environment variables are defined."""

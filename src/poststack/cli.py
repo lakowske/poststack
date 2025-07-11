@@ -1,8 +1,7 @@
 """
 Command-line interface for Poststack
 
-Provides a comprehensive CLI for managing container-based service orchestration
-including PostgreSQL, Apache, Dovecot, BIND, and certificate management.
+Provides a CLI for managing PostgreSQL containers and database schema migrations.
 """
 
 import sys
@@ -11,7 +10,6 @@ from typing import Optional
 
 import click
 
-from .bootstrap import bootstrap
 from .config import PoststackConfig, load_config
 from .database import database
 from .logging_config import setup_logging
@@ -62,10 +60,9 @@ def cli(
     log_dir: Path,
 ) -> None:
     """
-    Poststack: Container-based service orchestration
+    Poststack: PostgreSQL container and schema migration management
 
-    Manage containerized services including PostgreSQL, Apache, Dovecot,
-    BIND DNS, and Let's Encrypt certificates through a unified CLI.
+    Manage PostgreSQL containers and database schema migrations through a unified CLI.
     """
     global config
 
@@ -727,7 +724,6 @@ def logs_size(ctx: click.Context) -> None:
 
 
 # Add command groups
-cli.add_command(bootstrap)
 cli.add_command(database)
 cli.add_command(container)
 cli.add_command(logs)
@@ -765,25 +761,12 @@ def config_validate(ctx: click.Context) -> None:
     else:
         click.echo("✅ Database configuration valid")
 
-    # Check domain configuration for certificates
-    if not config.is_domain_configured:
-        issues.append("❌ Domain/Let's Encrypt email not configured")
-    else:
-        click.echo("✅ Domain configuration valid")
-
     # Check log directory
     try:
         config.create_directories()
         click.echo("✅ Log directories created/verified")
     except Exception as e:
         issues.append(f"❌ Log directory issue: {e}")
-
-    # Check certificate directory
-    cert_path = config.get_cert_path()
-    if cert_path.exists() or cert_path.parent.exists():
-        click.echo("✅ Certificate directory accessible")
-    else:
-        issues.append(f"❌ Certificate directory not accessible: {cert_path}")
 
     if issues:
         click.echo("\nConfiguration Issues:")
