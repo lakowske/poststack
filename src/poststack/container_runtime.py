@@ -37,7 +37,7 @@ class PostgreSQLRunner(ContainerRunner):
         
     def start_postgres_container(
         self,
-        container_name: str = "poststack-postgres",
+        container_name: Optional[str] = None,
         image_name: str = "poststack/postgres:latest",
         port: int = 5432,
         database_name: str = "poststack",
@@ -66,6 +66,10 @@ class PostgreSQLRunner(ContainerRunner):
         Returns:
             RuntimeResult with PostgreSQL container status
         """
+        # Use configured container name if not provided
+        if container_name is None:
+            container_name = self.config.postgres_container_name
+            
         logger.info(f"Starting PostgreSQL container: {container_name}")
         
         # Prepare environment variables
@@ -376,7 +380,7 @@ class PostgreSQLRunner(ContainerRunner):
                     'poststack' in image.lower()
                 )
                 
-                if is_postgres and (is_poststack or any('poststack-postgres' in name for name in names)):
+                if is_postgres and (is_poststack or any(self.config.postgres_container_name in name for name in names)):
                     # Extract connection details
                     container_details = self._extract_postgres_connection_info(container)
                     if container_details:
@@ -481,9 +485,9 @@ class PostgreSQLRunner(ContainerRunner):
         if not containers:
             return None
         
-        # Prefer containers with 'poststack-postgres' in the name
+        # Prefer containers with configured postgres name in the name
         for container in containers:
-            if 'poststack-postgres' in container['container_name']:
+            if self.config.postgres_container_name in container['container_name']:
                 logger.info(f"Using primary PostgreSQL container: {container['container_name']}")
                 return container['database_url']
         
@@ -513,22 +517,27 @@ class ContainerLifecycleManager:
         
     def start_test_environment(
         self,
-        postgres_port: int = 5433,  # Use non-standard port for testing
+        postgres_port: Optional[int] = None,
         cleanup_on_failure: bool = True,
     ) -> Tuple[RuntimeResult, Optional[HealthCheckResult]]:
         """
-        Start a complete test environment with PostgreSQL.
+        Start a complete PostgreSQL environment.
         
         Args:
-            postgres_port: Port for PostgreSQL container
+            postgres_port: Port for PostgreSQL container (uses config default if None)
             cleanup_on_failure: Clean up containers if startup fails
             
         Returns:
             Tuple of (PostgreSQL RuntimeResult, Health check result)
         """
-        logger.info("Starting test environment...")
+        logger.info("Starting PostgreSQL environment...")
         
-        postgres_container = "poststack-postgres-test"
+        # Use configured container name directly (no -test suffix)
+        postgres_container = self.config.postgres_container_name
+        
+        # Use configured port if not specified
+        if postgres_port is None:
+            postgres_port = self.config.postgres_host_port
         
         try:
             # Start PostgreSQL container

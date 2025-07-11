@@ -64,6 +64,18 @@ class PoststackConfig(BaseSettings):
         default="localhost",
         description="Container registry for built images",
     )
+    postgres_container_name: str = Field(
+        default="poststack-postgres",
+        description="Name for the PostgreSQL container",
+    )
+    postgres_host_port: int = Field(
+        default=5432,
+        description="Host port for PostgreSQL container",
+    )
+    project_containers_path: str = Field(
+        default="./containers",
+        description="Path to project-specific container definitions",
+    )
 
 
     # Migration configuration

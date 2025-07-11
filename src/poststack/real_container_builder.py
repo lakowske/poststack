@@ -276,3 +276,81 @@ class RealContainerBuilder(ContainerBuilder):
                 
         except Exception as e:
             logger.warning("Failed to cleanup test images: %s", e)
+    
+    def build_project_container(
+        self,
+        name: str,
+        dockerfile_path: str,
+        context_path: str,
+        image_tag: str,
+        no_cache: bool = False
+    ) -> BuildResult:
+        """
+        Build a project-level container.
+        
+        Args:
+            name: Container name
+            dockerfile_path: Path to Dockerfile
+            context_path: Build context path
+            image_tag: Image tag to use
+            no_cache: Disable build cache
+            
+        Returns:
+            BuildResult with build status and timing
+        """
+        logger.info(f"Building project container: {name}")
+        
+        # Create build result
+        result = BuildResult(
+            image_name=image_tag,
+            status=BuildStatus.BUILDING,
+            build_time=0.0,
+        )
+        
+        try:
+            start_time = time.time()
+            
+            # Build command
+            cmd = [
+                self.container_runtime,
+                "build",
+                "-f", dockerfile_path,
+                "-t", image_tag,
+                context_path
+            ]
+            
+            if no_cache:
+                cmd.extend(["--no-cache"])
+            
+            logger.info(f"Building with command: {' '.join(cmd)}")
+            
+            # Execute build
+            process = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=600,  # 10 minute timeout
+            )
+            
+            end_time = time.time()
+            result.build_time = end_time - start_time
+            
+            if process.returncode == 0:
+                result.status = BuildStatus.SUCCESS
+                logger.info(f"Successfully built project container {name} in {result.build_time:.1f}s")
+            else:
+                result.status = BuildStatus.FAILED
+                result.error_message = process.stderr
+                logger.error(f"Failed to build project container {name}: {process.stderr}")
+                
+        except subprocess.TimeoutExpired:
+            result.status = BuildStatus.FAILED
+            result.error_message = "Build timeout after 10 minutes"
+            logger.error(f"Project container build timeout: {name}")
+            
+        except Exception as e:
+            result.status = BuildStatus.FAILED
+            result.error_message = str(e)
+            logger.error(f"Project container build exception: {name} - {e}")
+        
+        return result

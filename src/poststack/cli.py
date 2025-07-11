@@ -13,6 +13,8 @@ import click
 from .config import PoststackConfig, load_config
 from .database import database
 from .logging_config import setup_logging
+from .models import BuildStatus
+from .project_containers import discover_project_containers
 from .real_container_builder import RealContainerBuilder
 from .container_runtime import ContainerLifecycleManager
 
@@ -185,6 +187,91 @@ def container_build(
         sys.exit(1)
 
 
+@container.command("build-project")
+@click.option(
+    "--container",
+    help="Specific project container to build (default: all discovered containers)",
+)
+@click.option(
+    "--no-cache",
+    is_flag=True,
+    help="Disable build cache",
+)
+@click.pass_context
+def container_build_project(
+    ctx: click.Context,
+    container: Optional[str],
+    no_cache: bool,
+) -> None:
+    """Build project-level containers."""
+    config = ctx.obj["config"]
+    
+    
+    click.echo("🚀 Building project containers...")
+    
+    try:
+        # Discover project containers
+        project_containers = discover_project_containers(config)
+        
+        if not project_containers:
+            click.echo(f"No project containers found in {config.project_containers_path}")
+            click.echo("Create a containers/ directory with Dockerfile to define project containers.")
+            return
+        
+        # Filter by specific container if requested
+        if container:
+            if container not in project_containers:
+                click.echo(f"❌ Container '{container}' not found in project containers")
+                click.echo(f"Available containers: {', '.join(project_containers.keys())}")
+                sys.exit(1)
+            containers_to_build = {container: project_containers[container]}
+        else:
+            containers_to_build = project_containers
+        
+        click.echo(f"Found {len(containers_to_build)} project container(s) to build:")
+        for name, info in containers_to_build.items():
+            click.echo(f"  - {name}: {info['description']}")
+        
+        # Build containers
+        builder = RealContainerBuilder(config)
+        results = {}
+        
+        for name, container_info in containers_to_build.items():
+            click.echo(f"\n🔨 Building {name}...")
+            
+            # Build the container using podman/docker
+            result = builder.build_project_container(
+                name=name,
+                dockerfile_path=container_info["dockerfile"],
+                context_path=container_info["context"],
+                image_tag=container_info["image"],
+                no_cache=no_cache
+            )
+            results[name] = result
+        
+        # Display results
+        click.echo("\n📊 Build Results:")
+        click.echo("-" * 40)
+        
+        successful = 0
+        for name, result in results.items():
+            if result.status == BuildStatus.SUCCESS:
+                click.echo(f"✅ {name}: {result.status.value} ({result.build_time:.1f}s)")
+                successful += 1
+            else:
+                click.echo(f"❌ {name}: {result.status.value}")
+        
+        click.echo(f"\n🎉 Successfully built {successful}/{len(results)} project container(s)")
+        
+        if successful < len(results):
+            click.echo(f"\n⚠️  {len(results) - successful} build(s) failed")
+            sys.exit(1)
+            
+    except Exception as e:
+        click.echo(f"❌ Project container build failed: {e}", err=True)
+        sys.exit(1)
+
+
 @container.command("list")
 @click.pass_context
 def container_list(ctx: click.Context) -> None:
@@ -294,8 +381,8 @@ def container_clean(ctx: click.Context, test_only: bool, force: bool) -> None:
 @click.option(
     "--postgres-port",
     type=int,
-    default=5433,
-    help="PostgreSQL port (default: 5433)",
+    default=None,
+    help="PostgreSQL host port (uses config default if not specified)",
 )
 @click.option(
     "--wait-timeout",
@@ -305,10 +392,14 @@ def container_clean(ctx: click.Context, test_only: bool, force: bool) -> None:
 )
 @click.pass_context
 def container_start(ctx: click.Context, postgres_port: int, wait_timeout: int) -> None:
-    """Start container test environment."""
+    """Start PostgreSQL container."""
     config = ctx.obj["config"]
     
-    click.echo("🚀 Starting container test environment...")
+    # Use configured port if not specified
+    if postgres_port is None:
+        postgres_port = config.postgres_host_port
+    
+    click.echo("🚀 Starting PostgreSQL container...")
     
     try:
         lifecycle_manager = ContainerLifecycleManager(config)
@@ -392,6 +483,46 @@ def container_stop(ctx: click.Context, stop_all: bool, container_names: tuple) -
         sys.exit(1)
 
 
+@container.command("remove")
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Force removal of containers (even if running)",
+)
+@click.argument("container_names", nargs=-1)
+@click.pass_context
+def container_remove(ctx: click.Context, force: bool, container_names: tuple) -> None:
+    """Remove containers."""
+    config = ctx.obj["config"]
+    
+    if not container_names:
+        click.echo("❓ Please specify container names to remove")
+        sys.exit(1)
+    
+    try:
+        lifecycle_manager = ContainerLifecycleManager(config)
+        
+        click.echo(f"🗑️  Removing containers: {', '.join(container_names)}")
+        
+        removed_count = 0
+        for container_name in container_names:
+            try:
+                result = lifecycle_manager.postgres_runner.remove_container(container_name, force=force)
+                if result.success:
+                    click.echo(f"✅ Removed {container_name}")
+                    removed_count += 1
+                else:
+                    click.echo(f"❌ Failed to remove {container_name}: {result.message}")
+            except Exception as e:
+                click.echo(f"❌ Error removing {container_name}: {e}")
+        
+        click.echo(f"\n🎉 Removed {removed_count}/{len(container_names)} containers")
+        
+    except Exception as e:
+        click.echo(f"❌ Failed to remove containers: {e}", err=True)
+        sys.exit(1)
+
+
 @container.command("status")
 @click.pass_context
 def container_status(ctx: click.Context) -> None:
@@ -401,10 +532,9 @@ def container_status(ctx: click.Context) -> None:
     try:
         lifecycle_manager = ContainerLifecycleManager(config)
         
-        # Check common container names
+        # Check configured container name
         container_names = [
-            "poststack-postgres-test",
-            "poststack-postgres",
+            config.postgres_container_name,
         ]
         
         click.echo("📊 Container Status:")
@@ -456,8 +586,8 @@ def container_health(ctx: click.Context, container_name: str, postgres_port: int
         lifecycle_manager = ContainerLifecycleManager(config)
         
         if not container_name:
-            # Check all known containers
-            container_name = "poststack-postgres-test"
+            # Check configured container
+            container_name = config.postgres_container_name
         
         click.echo(f"🏥 Performing health check on {container_name}...")
         
