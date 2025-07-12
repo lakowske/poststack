@@ -454,6 +454,94 @@ cli.add_command(database, name="db")
 
 # Add missing import
 import asyncio
+import shutil
+import os
+from .init import InitCommand
+
+
+# Init command
+@cli.command()
+@click.option("--postgres", is_flag=True, help="Include PostgreSQL container files")
+@click.option("--deploy", is_flag=True, help="Include PostgreSQL deployment files")
+@click.option("--all", "include_all", is_flag=True, help="Include all PostgreSQL files")
+@click.option("--force", is_flag=True, help="Overwrite existing files")
+@click.pass_context
+def init(ctx: click.Context, postgres: bool, deploy: bool, include_all: bool, force: bool) -> None:
+    """Initialize project with PostgreSQL configuration files.
+    
+    Makes PostgreSQL container and deployment configuration visible and customizable
+    by copying template files to your project's containers/ and deploy/ directories.
+    
+    Examples:
+        poststack init --all          # Copy all PostgreSQL files
+        poststack init --postgres     # Copy only container files  
+        poststack init --deploy       # Copy only deployment files
+        poststack init --all --force  # Overwrite existing files
+    """
+    config = ctx.obj["config"]
+    
+    try:
+        # Initialize the init command handler
+        init_cmd = InitCommand(config)
+        
+        # Determine what to include
+        if include_all:
+            include_postgres = True
+            include_deploy = True
+        else:
+            include_postgres = postgres
+            include_deploy = deploy
+            
+            # Default to all if none specified
+            if not include_postgres and not include_deploy:
+                include_postgres = True
+                include_deploy = True
+        
+        click.echo("🚀 Initializing project with PostgreSQL configuration files...")
+        
+        result = init_cmd.initialize_project(
+            include_postgres=include_postgres,
+            include_deploy=include_deploy,
+            force=force
+        )
+        
+        if result.success:
+            click.echo("✅ Project initialization completed successfully!")
+            
+            if result.postgres_files_created:
+                click.echo(f"\n📦 PostgreSQL container files created:")
+                for file_path in result.postgres_files_created:
+                    click.echo(f"   - {file_path}")
+            
+            if result.deploy_files_created:
+                click.echo(f"\n🚢 Deployment files created:")
+                for file_path in result.deploy_files_created:
+                    click.echo(f"   - {file_path}")
+            
+            if result.files_skipped:
+                click.echo(f"\n⚠️  Files skipped (already exist, use --force to overwrite):")
+                for file_path in result.files_skipped:
+                    click.echo(f"   - {file_path}")
+                    
+            click.echo(f"\n📖 Documentation created:")
+            for file_path in result.docs_created:
+                click.echo(f"   - {file_path}")
+                
+            click.echo(f"\n🎯 Next steps:")
+            click.echo(f"   1. Review and customize the generated files")
+            click.echo(f"   2. Run 'poststack build' to build with your configuration")
+            click.echo(f"   3. Run 'poststack env start' to deploy")
+        else:
+            click.echo(f"❌ Initialization failed: {result.error_message}")
+            if result.validation_errors:
+                click.echo("Validation errors:")
+                for error in result.validation_errors:
+                    click.echo(f"   - {error}")
+            sys.exit(1)
+            
+    except Exception as e:
+        click.echo(f"❌ Failed to initialize project: {e}", err=True)
+        sys.exit(1)
 
 
 # Configuration commands
