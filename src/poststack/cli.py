@@ -935,9 +935,14 @@ def env_start(ctx: click.Context, environment: str, init_only: bool) -> None:
     is_flag=True,
     help="Keep PostgreSQL database running"
 )
+@click.option(
+    "--rm",
+    is_flag=True,
+    help="Remove containers after stopping (for cleanup)"
+)
 @click.pass_context
-def env_stop(ctx: click.Context, environment: str, keep_postgres: bool) -> None:
-    """Stop an environment."""
+def env_stop(ctx: click.Context, environment: str, keep_postgres: bool, rm: bool) -> None:
+    """Stop an environment (keeps containers by default)."""
     config = ctx.obj["config"]
     
     try:
@@ -946,18 +951,99 @@ def env_stop(ctx: click.Context, environment: str, keep_postgres: bool) -> None:
         
         orchestrator = EnvironmentOrchestrator(config)
         
-        click.echo(f"🛑 Stopping environment: {environment}")
+        action = "Stopping and removing" if rm else "Stopping"
+        click.echo(f"🛑 {action} environment: {environment}")
         
-        success = asyncio.run(orchestrator.stop_environment(environment, keep_postgres=keep_postgres))
+        success = asyncio.run(orchestrator.stop_environment(environment, keep_postgres=keep_postgres, remove=rm))
         
         if success:
-            click.echo(f"✅ Environment stopped: {environment}")
+            status = "stopped and cleaned" if rm else "stopped"
+            click.echo(f"✅ Environment {status}: {environment}")
         else:
             click.echo(f"❌ Failed to stop environment: {environment}")
             sys.exit(1)
             
     except Exception as e:
         click.echo(f"❌ Environment stop failed: {e}", err=True)
+        sys.exit(1)
+
+
+@env.command("restart")
+@click.argument("environment")
+@click.option(
+    "--keep-postgres",
+    is_flag=True,
+    help="Don't restart PostgreSQL database"
+)
+@click.pass_context
+def env_restart(ctx: click.Context, environment: str, keep_postgres: bool) -> None:
+    """Restart an environment (stop + remove + start)."""
+    config = ctx.obj["config"]
+    
+    try:
+        import asyncio
+        from .environment import EnvironmentOrchestrator
+        
+        orchestrator = EnvironmentOrchestrator(config)
+        
+        click.echo(f"🔄 Restarting environment: {environment}")
+        
+        # First stop and remove containers
+        click.echo(f"   Stopping and cleaning containers...")
+        stop_success = asyncio.run(orchestrator.stop_environment(environment, keep_postgres=keep_postgres, remove=True))
+        
+        if not stop_success:
+            click.echo(f"❌ Failed to stop environment during restart: {environment}")
+            sys.exit(1)
+        
+        # Then start fresh
+        click.echo(f"   Starting fresh containers...")
+        start_success = asyncio.run(orchestrator.start_environment(environment))
+        
+        if start_success.success:
+            click.echo(f"✅ Environment restarted: {environment}")
+        else:
+            click.echo(f"❌ Failed to start environment during restart: {environment}")
+            if start_success.error_message:
+                click.echo(f"   Error: {start_success.error_message}")
+            sys.exit(1)
+            
+    except Exception as e:
+        click.echo(f"❌ Environment restart failed: {e}", err=True)
+        sys.exit(1)
+
+
+@env.command("clean")
+@click.argument("environment")
+@click.option(
+    "--keep-postgres",
+    is_flag=True,
+    help="Don't remove PostgreSQL database"
+)
+@click.pass_context
+def env_clean(ctx: click.Context, environment: str, keep_postgres: bool) -> None:
+    """Stop and remove all containers for an environment."""
+    config = ctx.obj["config"]
+    
+    try:
+        import asyncio
+        from .environment import EnvironmentOrchestrator
+        
+        orchestrator = EnvironmentOrchestrator(config)
+        
+        click.echo(f"🧹 Cleaning environment: {environment}")
+        
+        # Stop and remove containers (same as stop --rm)
+        success = asyncio.run(orchestrator.stop_environment(environment, keep_postgres=keep_postgres, remove=True))
+        
+        if success:
+            click.echo(f"✅ Environment cleaned: {environment}")
+        else:
+            click.echo(f"❌ Failed to clean environment: {environment}")
+            sys.exit(1)
+            
+    except Exception as e:
+        click.echo(f"❌ Environment clean failed: {e}", err=True)
         sys.exit(1)
 
 

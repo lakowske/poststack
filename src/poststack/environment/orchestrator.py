@@ -141,34 +141,36 @@ class EnvironmentOrchestrator:
                 total_duration=asyncio.get_event_loop().time() - start_time
             )
     
-    async def stop_environment(self, env_name: str, keep_postgres: bool = False) -> bool:
+    async def stop_environment(self, env_name: str, keep_postgres: bool = False, remove: bool = False) -> bool:
         """
         Stop all containers for an environment.
         
         Args:
             env_name: Environment name to stop
             keep_postgres: If True, don't stop postgres database
+            remove: If True, remove containers after stopping (--rm flag)
             
         Returns:
             True if successful
         """
-        logger.info(f"Stopping environment: {env_name}")
+        action = "Stopping and removing" if remove else "Stopping"
+        logger.info(f"{action} environment: {env_name}")
         
         try:
             env_config = self.config_parser.get_environment_config(env_name)
             
             # Stop deployment containers
             if env_config.deployment.compose:
-                await self._stop_compose_deployment(env_config.deployment.compose)
+                await self._stop_compose_deployment(env_config.deployment.compose, remove=remove)
             elif env_config.deployment.pod:
-                await self._stop_pod_deployment(env_config.deployment.pod)
+                await self._stop_pod_deployment(env_config.deployment.pod, remove=remove)
             
             # Stop init containers (they should already be stopped, but cleanup just in case)
             for init_ref in env_config.init:
                 if init_ref.compose:
-                    await self._stop_compose_deployment(init_ref.compose)
+                    await self._stop_compose_deployment(init_ref.compose, remove=remove)
                 elif init_ref.pod:
-                    await self._stop_pod_deployment(init_ref.pod)
+                    await self._stop_pod_deployment(init_ref.pod, remove=remove)
             
             # Stop postgres if requested
             if not keep_postgres:
@@ -178,14 +180,23 @@ class EnvironmentOrchestrator:
                 
                 if postgres_container_name and postgres_status.get("status") != "not_running":
                     success = self.postgres_runner.stop_postgres_container(postgres_container_name)
-                    if not success:
-                        logger.warning(f"Failed to stop postgres container: {postgres_container_name}")
-                    else:
+                    if success:
                         logger.info(f"Stopped postgres container: {postgres_container_name}")
+                        
+                        # Remove container if --rm flag specified
+                        if remove:
+                            removal_success = self.postgres_runner.remove_postgres_container(postgres_container_name)
+                            if removal_success:
+                                logger.info(f"Removed postgres container: {postgres_container_name}")
+                            else:
+                                logger.warning(f"Failed to remove postgres container: {postgres_container_name}")
+                    else:
+                        logger.warning(f"Failed to stop postgres container: {postgres_container_name}")
                 else:
                     logger.info(f"No running postgres container found for environment: {env_name}")
             
-            logger.info(f"Environment stopped: {env_name}")
+            status = "stopped and cleaned" if remove else "stopped"
+            logger.info(f"Environment {status}: {env_name}")
             return True
             
         except Exception as e:
@@ -219,7 +230,7 @@ class EnvironmentOrchestrator:
             return {"environment": env_name, "error": str(e)}
     
     async def _setup_postgres(self, env_config: EnvironmentConfig) -> PostgresInfo:
-        """Setup PostgreSQL database for environment."""
+        """Setup PostgreSQL database for environment with smart container detection."""
         postgres_config = env_config.postgres
         
         # Generate password if needed
@@ -231,12 +242,36 @@ class EnvironmentOrchestrator:
         else:
             actual_password = postgres_config.password
         
-        # Start postgres container with environment-specific settings
+        # Container name pattern
         container_name = f"poststack-postgres-{postgres_config.database}"
         
         logger.info(f"Setting up PostgreSQL database: {postgres_config.database} on port {postgres_config.port}")
         
-        # Use existing postgres runner but with custom settings
+        # Check for existing container (using the actual container name pattern)
+        existing_container = self.postgres_runner.find_postgres_container_by_env(container_name)
+        
+        if existing_container:
+            container_status = existing_container.get('status', '').lower()
+            existing_name = existing_container.get('name', container_name)
+            
+            if container_status == 'running':
+                logger.info(f"Found running PostgreSQL container: {existing_name}")
+                return PostgresInfo(postgres_config, actual_password)
+            elif container_status in ['stopped', 'exited']:
+                logger.info(f"Found stopped PostgreSQL container {existing_name}, restarting...")
+                success = self.postgres_runner.restart_postgres_container(existing_name)
+                if success:
+                    logger.info(f"Successfully restarted PostgreSQL container: {existing_name}")
+                    return PostgresInfo(postgres_config, actual_password)
+                else:
+                    logger.warning(f"Failed to restart container {existing_name}, removing and recreating...")
+                    self.postgres_runner.remove_postgres_container(existing_name, force=True)
+            else:
+                logger.warning(f"PostgreSQL container {existing_name} in unexpected state '{container_status}', removing and recreating...")
+                self.postgres_runner.remove_postgres_container(existing_name, force=True)
+        
+        # Create new container (either no existing container or cleanup was needed)
+        logger.info(f"Creating new PostgreSQL container: {container_name}")
         success = self.postgres_runner.start_postgres_container(
             container_name=container_name,
             port=postgres_config.port,
@@ -521,10 +556,17 @@ class EnvironmentOrchestrator:
             # Keep temp file for running deployment (don't cleanup immediately)
             pass
     
-    async def _stop_compose_deployment(self, compose_file: str) -> bool:
+    async def _stop_compose_deployment(self, compose_file: str, remove: bool = False) -> bool:
         """Stop Docker Compose deployment."""
         try:
+            # Use 'down' which stops and removes containers by default for compose
             cmd = [self.poststack_config.container_runtime, "compose", "-f", compose_file, "down"]
+            
+            # Note: docker-compose down already removes containers, so remove flag doesn't change behavior
+            if remove:
+                logger.debug(f"Stopping and removing compose deployment: {compose_file}")
+            else:
+                logger.debug(f"Stopping compose deployment: {compose_file}")
             
             process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -540,11 +582,16 @@ class EnvironmentOrchestrator:
             logger.error(f"Failed to stop compose deployment {compose_file}: {e}")
             return False
     
-    async def _stop_pod_deployment(self, pod_file: str) -> bool:
+    async def _stop_pod_deployment(self, pod_file: str, remove: bool = False) -> bool:
         """Stop Podman Pod deployment."""
         try:
             # Use podman play kube --down to stop the pod
             cmd = ["podman", "play", "kube", "--down", pod_file]
+            
+            if remove:
+                logger.debug(f"Stopping and removing pod deployment: {pod_file}")
+            else:
+                logger.debug(f"Stopping pod deployment: {pod_file}")
             
             process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -552,11 +599,51 @@ class EnvironmentOrchestrator:
                 stderr=asyncio.subprocess.STDOUT
             )
             
-            await process.communicate()
-            return process.returncode == 0
+            stdout, _ = await process.communicate()
+            success = process.returncode == 0
+            
+            # If remove flag is set and stop was successful, force remove any remaining pod
+            if remove and success:
+                # Extract pod name from the deployment file to force remove
+                await self._force_remove_pod_from_file(pod_file)
+            
+            return success
             
         except Exception as e:
             logger.error(f"Failed to stop pod deployment {pod_file}: {e}")
+            return False
+    
+    async def _force_remove_pod_from_file(self, pod_file: str) -> bool:
+        """Force remove pod based on deployment file metadata."""
+        try:
+            # Read the pod file to extract pod name
+            with open(pod_file, 'r') as f:
+                import yaml
+                pod_data = yaml.safe_load(f)
+                
+            pod_name = pod_data.get('metadata', {}).get('name')
+            if not pod_name:
+                logger.warning(f"Could not extract pod name from {pod_file}")
+                return False
+                
+            # Force remove the pod
+            cmd = ["podman", "pod", "rm", "--force", pod_name]
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT
+            )
+            
+            await process.communicate()
+            if process.returncode == 0:
+                logger.debug(f"Force removed pod: {pod_name}")
+            else:
+                logger.debug(f"Pod {pod_name} was already removed or doesn't exist")
+            
+            return True
+            
+        except Exception as e:
+            logger.debug(f"Could not force remove pod from {pod_file}: {e}")
             return False
     
     def _get_postgres_status(self, env_name: str) -> Dict:

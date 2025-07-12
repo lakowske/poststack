@@ -617,6 +617,101 @@ class PostgreSQLRunner(ContainerRunner):
         except Exception as e:
             logger.error(f"Error stopping PostgreSQL container {container_name}: {e}")
             return False
+    
+    def restart_postgres_container(self, container_name: str) -> bool:
+        """
+        Restart an existing stopped PostgreSQL container.
+        
+        Args:
+            container_name: Name of the container to restart
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            logger.info(f"Restarting PostgreSQL container: {container_name}")
+            
+            cmd = [self.container_runtime, "restart", container_name]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            
+            if result.returncode == 0:
+                logger.info(f"Successfully restarted PostgreSQL container: {container_name}")
+                return True
+            else:
+                logger.error(f"Failed to restart container {container_name}: {result.stderr}")
+                return False
+                    
+        except subprocess.TimeoutExpired:
+            logger.error(f"Timeout restarting PostgreSQL container: {container_name}")
+            return False
+        except Exception as e:
+            logger.error(f"Error restarting PostgreSQL container {container_name}: {e}")
+            return False
+    
+    def remove_postgres_container(self, container_name: str, force: bool = True) -> bool:
+        """
+        Remove a PostgreSQL container.
+        
+        Args:
+            container_name: Name of the container to remove
+            force: Use force removal if container is running
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            logger.info(f"Removing PostgreSQL container: {container_name}")
+            
+            cmd = [self.container_runtime, "rm", container_name]
+            if force:
+                cmd.insert(-1, "--force")
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            
+            if result.returncode == 0:
+                logger.info(f"Successfully removed PostgreSQL container: {container_name}")
+                return True
+            else:
+                logger.warning(f"Failed to remove container {container_name}: {result.stderr}")
+                return False
+                    
+        except subprocess.TimeoutExpired:
+            logger.error(f"Timeout removing PostgreSQL container: {container_name}")
+            return False
+        except Exception as e:
+            logger.error(f"Error removing PostgreSQL container {container_name}: {e}")
+            return False
+    
+    def find_postgres_container_by_env(self, container_name_or_pattern: str) -> Optional[Dict]:
+        """
+        Find postgres container by name or pattern.
+        
+        Args:
+            container_name_or_pattern: Exact container name or pattern to search for
+            
+        Returns:
+            Dict with container info if found, None otherwise
+        """
+        try:
+            # Get all postgres containers
+            all_postgres = self.list_postgres_containers()
+            
+            # First try exact name match
+            for container in all_postgres:
+                if container.get('name') == container_name_or_pattern:
+                    return container
+            
+            # Then try pattern matching
+            for container in all_postgres:
+                name = container.get('name', '')
+                if container_name_or_pattern in name:
+                    return container
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error finding postgres container for {container_name_or_pattern}: {e}")
+            return None
 
 
 
