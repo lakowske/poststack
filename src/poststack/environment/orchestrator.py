@@ -9,6 +9,7 @@ Manages the complete lifecycle of environment deployment including:
 """
 
 import asyncio
+import json
 import logging
 import subprocess
 from dataclasses import dataclass
@@ -73,13 +74,19 @@ class EnvironmentOrchestrator:
         try:
             # Load and validate environment configuration
             env_config = self.config_parser.get_environment_config(env_name)
+            project_config = self.config_parser.load_project_config()
+            
+            # Ensure all required volumes exist
+            volume_success = await self._ensure_volumes_exist(env_name, env_config, project_config.project.name)
+            if not volume_success:
+                raise RuntimeError(f"Failed to create required volumes for environment: {env_name}")
             
             # Start PostgreSQL database
             postgres_info = await self._setup_postgres(env_config)
             postgres_started = True
             
             # Create variable substitutor
-            substitutor = VariableSubstitutor(env_name, env_config, postgres_info)
+            substitutor = VariableSubstitutor(env_name, env_config, postgres_info, project_config.project.name)
             
             # Run init phase
             init_results = await self._run_init_phase(env_config, substitutor)
@@ -585,6 +592,9 @@ class EnvironmentOrchestrator:
     async def _stop_pod_deployment_with_substitution(self, env_name: str, env_config: EnvironmentConfig, remove: bool = False) -> bool:
         """Stop pod deployment using processed template with variable substitution."""
         try:
+            # Get project configuration for variable substitution
+            project_config = self.config_parser.load_project_config()
+            
             # Get postgres info for variable substitution
             postgres_info = None
             try:
@@ -600,14 +610,14 @@ class EnvironmentOrchestrator:
             
             if postgres_info:
                 # Create variable substitutor
-                substitutor = VariableSubstitutor(env_name, env_config, postgres_info)
+                substitutor = VariableSubstitutor(env_name, env_config, postgres_info, project_config.project.name)
             else:
                 # Create a dummy postgres info for template processing
                 dummy_postgres = PostgresInfo(
                     config=env_config.postgres,
                     actual_password="dummy_password"
                 )
-                substitutor = VariableSubstitutor(env_name, env_config, dummy_postgres)
+                substitutor = VariableSubstitutor(env_name, env_config, dummy_postgres, project_config.project.name)
             
             # Process the pod file with substitution
             pod_file = env_config.deployment.pod
@@ -816,4 +826,183 @@ class EnvironmentOrchestrator:
                 
         except Exception as e:
             logger.error(f"Failed to get pod status for {pod_file}: {e}")
+            return []
+    
+    async def _ensure_volumes_exist(self, env_name: str, env_config: EnvironmentConfig, project_name: str) -> bool:
+        """Ensure all required named volumes exist before deployment."""
+        try:
+            for volume_name, volume_config in env_config.volumes.items():
+                if volume_config.type == "named":
+                    # Generate volume name using same logic as VariableSubstitutor
+                    default_name = f"{project_name}-{volume_name}-{env_name}"
+                    actual_volume_name = volume_config.name or default_name
+                    
+                    # Check if volume exists
+                    if not await self._volume_exists(actual_volume_name):
+                        # Create the volume
+                        success = await self._create_volume(actual_volume_name, volume_config)
+                        if not success:
+                            logger.error(f"Failed to create volume: {actual_volume_name}")
+                            return False
+                        logger.info(f"Created volume: {actual_volume_name}")
+                    else:
+                        logger.debug(f"Volume already exists: {actual_volume_name}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to ensure volumes exist for {env_name}: {e}")
+            return False
+    
+    async def _volume_exists(self, volume_name: str) -> bool:
+        """Check if a named volume exists."""
+        try:
+            cmd = [self.poststack_config.container_runtime, "volume", "inspect", volume_name]
+            
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL
+            )
+            
+            await process.wait()
+            return process.returncode == 0
+            
+        except Exception as e:
+            logger.debug(f"Error checking volume existence {volume_name}: {e}")
+            return False
+    
+    async def _create_volume(self, volume_name: str, volume_config) -> bool:
+        """Create a named volume."""
+        try:
+            cmd = [self.poststack_config.container_runtime, "volume", "create"]
+            
+            # Add size constraint if specified (Podman format)
+            if volume_config.size:
+                cmd.extend(["--opt", f"size={volume_config.size}"])
+            
+            # Add user permissions for rootless podman
+            # This ensures volumes are accessible by containers
+            import os
+            uid = os.getuid()
+            gid = os.getgid()
+            cmd.extend(["--opt", f"o=uid={uid},gid={gid}"])
+            
+            cmd.append(volume_name)
+            
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode == 0:
+                logger.info(f"Successfully created volume: {volume_name}")
+                return True
+            else:
+                logger.error(f"Failed to create volume {volume_name}: {stderr.decode()}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Exception creating volume {volume_name}: {e}")
+            return False
+    
+    async def remove_environment_volumes(self, env_name: str, force: bool = False) -> bool:
+        """Remove all volumes associated with an environment."""
+        try:
+            env_config = self.config_parser.get_environment_config(env_name)
+            project_config = self.config_parser.load_project_config()
+            
+            success = True
+            for volume_name, volume_config in env_config.volumes.items():
+                if volume_config.type == "named":
+                    # Generate volume name
+                    default_name = f"{project_config.project.name}-{volume_name}-{env_name}"
+                    actual_volume_name = volume_config.name or default_name
+                    
+                    if await self._volume_exists(actual_volume_name):
+                        if await self._remove_volume(actual_volume_name, force):
+                            logger.info(f"Removed volume: {actual_volume_name}")
+                        else:
+                            logger.error(f"Failed to remove volume: {actual_volume_name}")
+                            success = False
+                    else:
+                        logger.debug(f"Volume does not exist: {actual_volume_name}")
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"Failed to remove environment volumes for {env_name}: {e}")
+            return False
+    
+    async def _remove_volume(self, volume_name: str, force: bool = False) -> bool:
+        """Remove a named volume."""
+        try:
+            cmd = [self.poststack_config.container_runtime, "volume", "rm"]
+            
+            if force:
+                cmd.append("--force")
+            
+            cmd.append(volume_name)
+            
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode == 0:
+                return True
+            else:
+                logger.warning(f"Failed to remove volume {volume_name}: {stderr.decode()}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Exception removing volume {volume_name}: {e}")
+            return False
+    
+    async def list_environment_volumes(self, env_name: Optional[str] = None) -> List[Dict[str, str]]:
+        """List volumes, optionally filtered by environment."""
+        try:
+            # Get all volumes
+            cmd = [self.poststack_config.container_runtime, "volume", "ls", "--format", "json"]
+            
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode != 0:
+                logger.error(f"Failed to list volumes: {stderr.decode()}")
+                return []
+            
+            # Parse volume information
+            volumes = []
+            try:
+                volume_data = json.loads(stdout.decode())
+                if isinstance(volume_data, list):
+                    for volume in volume_data:
+                        volume_name = volume.get("Name", "")
+                        # Filter by environment if specified
+                        if env_name is None or f"-{env_name}" in volume_name:
+                            volumes.append({
+                                "name": volume_name,
+                                "driver": volume.get("Driver", ""),
+                                "mountpoint": volume.get("Mountpoint", ""),
+                                "created": volume.get("CreatedAt", "")
+                            })
+            except json.JSONDecodeError:
+                logger.error("Failed to parse volume list JSON")
+            
+            return volumes
+            
+        except Exception as e:
+            logger.error(f"Failed to list volumes: {e}")
             return []

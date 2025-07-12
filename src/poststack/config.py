@@ -33,6 +33,30 @@ class DeploymentRef(BaseModel):
             raise ValueError("Exactly one of 'compose' or 'pod' must be specified")
 
 
+class VolumeConfig(BaseModel):
+    """Volume configuration for container storage."""
+    type: str = Field("emptyDir", description="Volume type: emptyDir, named, hostPath")
+    name: Optional[str] = Field(None, description="Custom volume name override")
+    size: Optional[str] = Field("1Gi", description="Volume size for named volumes")
+    path: Optional[str] = Field(None, description="Host path for hostPath volumes")
+    retention: int = Field(30, description="Days to keep volume after environment deletion")
+    
+    @validator('type')
+    def validate_volume_type(cls, v):
+        """Ensure volume type is valid."""
+        valid_types = ['emptyDir', 'named', 'hostPath']
+        if v not in valid_types:
+            raise ValueError(f"Volume type must be one of: {', '.join(valid_types)}")
+        return v
+    
+    @validator('path')
+    def validate_path_for_hostpath(cls, v, values):
+        """Ensure path is provided for hostPath volumes."""
+        if values.get('type') == 'hostPath' and not v:
+            raise ValueError("path is required for hostPath volumes")
+        return v
+
+
 class PostgresConfig(BaseModel):
     """PostgreSQL database configuration for an environment."""
     database: str = Field(..., description="Database name")
@@ -53,6 +77,7 @@ class EnvironmentConfig(BaseModel):
     init: List[DeploymentRef] = Field(default_factory=list, description="Initialization deployments (run first)")
     deployment: DeploymentRef = Field(..., description="Main application deployment")
     variables: Dict[str, str] = Field(default_factory=dict, description="Environment-specific variables")
+    volumes: Dict[str, VolumeConfig] = Field(default_factory=dict, description="Volume configurations for container storage")
 
 
 class ProjectMeta(BaseModel):

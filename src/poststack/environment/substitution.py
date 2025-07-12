@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from ..config import EnvironmentConfig, PostgresConfig
+from ..config import EnvironmentConfig, PostgresConfig, VolumeConfig
 
 logger = logging.getLogger(__name__)
 
@@ -52,11 +52,12 @@ class PostgresInfo:
 class VariableSubstitutor:
     """Engine for processing template files with variable substitution."""
     
-    def __init__(self, environment_name: str, environment_config: EnvironmentConfig, postgres_info: PostgresInfo):
+    def __init__(self, environment_name: str, environment_config: EnvironmentConfig, postgres_info: PostgresInfo, project_name: str = "poststack"):
         """Initialize substitutor with environment configuration and postgres info."""
         self.environment_name = environment_name
         self.environment_config = environment_config
         self.postgres_info = postgres_info
+        self.project_name = project_name
         self.variables = self._build_variable_map()
         
         logger.debug(f"Created variable substitutor for environment '{environment_name}' with {len(self.variables)} variables")
@@ -67,6 +68,9 @@ class VariableSubstitutor:
         
         # Add poststack-provided variables
         variables.update(self._get_poststack_variables())
+        
+        # Add volume variables
+        variables.update(self._get_volume_variables())
         
         # Add user-defined variables from environment config
         variables.update(self.environment_config.variables)
@@ -99,6 +103,58 @@ class VariableSubstitutor:
                     variables[key] = value
         
         return variables
+    
+    def _get_volume_variables(self) -> Dict[str, str]:
+        """Generate volume variables for template substitution."""
+        variables = {}
+        
+        # Define standard volume names used in templates
+        standard_volumes = ['postgres_data', 'postgres_logs', 'postgres_config', 'apache_logs', 'apache_config']
+        
+        # Process configured volumes
+        for volume_name, volume_config in self.environment_config.volumes.items():
+            # Convert volume name to uppercase for variable names
+            var_prefix = f"VOLUME_{volume_name.upper()}"
+            
+            # Generate volume type variable
+            volume_type = self._get_k8s_volume_type(volume_config)
+            variables[f"{var_prefix}_TYPE"] = volume_type
+            
+            # Generate volume configuration variable
+            volume_config_json = self._get_k8s_volume_config(volume_config, volume_name)
+            variables[f"{var_prefix}_CONFIG"] = volume_config_json
+        
+        # Provide defaults for standard volumes that aren't configured
+        for volume_name in standard_volumes:
+            var_prefix = f"VOLUME_{volume_name.upper()}"
+            if f"{var_prefix}_TYPE" not in variables:
+                variables[f"{var_prefix}_TYPE"] = "emptyDir"
+                variables[f"{var_prefix}_CONFIG"] = "{}"
+            
+        return variables
+    
+    def _get_k8s_volume_type(self, volume_config: VolumeConfig) -> str:
+        """Get Kubernetes/Podman volume type for a volume configuration."""
+        type_mapping = {
+            "emptyDir": "emptyDir",
+            "named": "persistentVolumeClaim", 
+            "hostPath": "hostPath"
+        }
+        return type_mapping.get(volume_config.type, "emptyDir")
+    
+    def _get_k8s_volume_config(self, volume_config: VolumeConfig, volume_name: str) -> str:
+        """Get Kubernetes/Podman volume configuration YAML for a volume."""
+        if volume_config.type == "emptyDir":
+            return "{}"
+        elif volume_config.type == "hostPath":
+            return f'{{"path": "{volume_config.path}"}}'
+        elif volume_config.type == "named":
+            # Generate default volume name if not specified
+            default_name = f"{self.project_name}-{volume_name}-{self.environment_name}"
+            volume_claim_name = volume_config.name or default_name
+            return f'{{"claimName": "{volume_claim_name}"}}'
+        else:
+            return "{}"
     
     def process_file(self, file_path: str, output_path: Optional[str] = None) -> str:
         """
