@@ -15,7 +15,7 @@ Poststack is a Python framework for managing PostgreSQL containers and database 
 
 Poststack features a powerful CLI that handles PostgreSQL container building, database setup, and schema management. All operations are logged for transparency and debugging.
 
-### Quick Start (Environment Management - Recommended)
+### Quick Start
 
 1. **Install Prerequisites**
    - Python 3.9+
@@ -29,6 +29,8 @@ Poststack features a powerful CLI that handles PostgreSQL container building, da
 
 3. **Create Environment Configuration** (.poststack.yml):
    ```yaml
+   environment: dev  # Currently selected environment
+   
    project:
      name: myproject
    
@@ -63,38 +65,20 @@ Poststack features a powerful CLI that handles PostgreSQL container building, da
          value: "${LOG_LEVEL}"
    ```
 
-5. **Deploy Environment**
+5. **Build and Deploy**
    ```bash
-   # Preview deployment
-   poststack env dry-run dev
+   # Build all images (base, postgres, project containers)
+   poststack build
    
-   # Start development environment
-   poststack env start dev
+   # Start development environment (uses current environment from config)
+   poststack env start
    
    # Check status
-   poststack env status dev
-   ```
-
-### Quick Start (Legacy Container Commands)
-
-For existing users or simple use cases:
-
-1. **Build and Start PostgreSQL Container**
-   ```bash
-   # Build PostgreSQL container image
-   poststack container build
+   poststack env status
    
-   # Start PostgreSQL container
-   poststack container start --postgres-port 5433
-   ```
-
-2. **Initialize Database Schema**
-   ```bash
-   # Initialize database schema
-   poststack database create-schema --url "postgresql://poststack:poststack_dev@localhost:5433/poststack"
-   
-   # Run migrations
-   poststack database migrate --url "postgresql://poststack:poststack_dev@localhost:5433/poststack"
+   # Switch environments
+   poststack env switch staging
+   poststack env start
    ```
 
 ### Monitoring and Logs
@@ -153,62 +137,30 @@ poststack env config <env>                  # Show effective configuration
 poststack env logs <env> [service]          # Show environment logs
 ```
 
-#### Container Commands (Legacy)
+#### Essential Commands
 ```bash
-# Build container images
-poststack container build [--image postgres|base-debian|all]
+# Build all images (base, postgres, project containers)
+poststack build [--no-cache]
 
-# Build project-level custom containers
-poststack container build-project [--container NAME] [--no-cache]
+# Environment management  
+poststack env list                    # List environments (* = current)
+poststack env start [environment]     # Start environment (default: current)
+poststack env stop [environment]      # Stop environment
+poststack env restart [environment]   # Restart environment
+poststack env status [environment]    # Show environment status
+poststack env switch <environment>    # Change current environment
 
-# Start/stop project containers  
-poststack container start-project [--container NAME] [--port PORT]
-poststack container stop-project [--container NAME] [--all-project]
+# Database operations (environment-aware)
+poststack db create-schema            # Create schema in current environment
+poststack db migrate                  # Run migrations
+poststack db test-connection          # Test database connection
+poststack db show-schema              # Show current schema
+poststack db backup                   # Backup database
 
-# Container lifecycle
-poststack container start [--postgres-port PORT]
-poststack container stop [--all] [container_names]
-poststack container remove [--force] <container_names>
-poststack container status
-poststack container health
-
-# Management
-poststack container list
-poststack container clean
-```
-
-#### Database Commands
-```bash
-# Schema management
-poststack database create-schema
-poststack database show-schema
-poststack database drop-schema
-
-# Migration management
-poststack database migrate [--target-version VERSION]
-poststack database rollback [--target-version VERSION]
-poststack database migration-status
-poststack database verify-migrations
-poststack database unlock-migrations
-
-# Operations
-poststack database test-connection
-poststack database backup
-```
-
-#### Utility Commands
-```bash
-# Configuration
-poststack config-show
-poststack config-validate
-
-# Logs
-poststack logs list [--category main|container|database]
-poststack logs clean [--days 7]
-poststack logs size
-
-# Version
-poststack version
+# Configuration and utilities
+poststack config-show                 # Display current configuration
+poststack config-validate             # Validate configuration
+poststack version                     # Show version information
 ```
 
 ## Configuration
@@ -245,68 +197,26 @@ echo "POSTSTACK_POSTGRES_HOST_PORT=5434" >> .env
 - **project_container_network**: Network mode for project containers (default: bridge)
 - **project_container_restart_policy**: Restart policy for project containers (default: unless-stopped)
 
-## Container Customization
+## Environment-First Approach
 
-### Custom Container Names and Ports
-
-Poststack allows you to customize PostgreSQL container names and host ports for project isolation:
-
-```bash
-# Set custom container name and port via environment variables
-export POSTSTACK_POSTGRES_CONTAINER_NAME="my-project-postgres"
-export POSTSTACK_POSTGRES_HOST_PORT="5434"
-
-# Or use .env file in your project root
-echo "POSTSTACK_POSTGRES_CONTAINER_NAME=unified-postgres" > .env
-echo "POSTSTACK_POSTGRES_HOST_PORT=5434" >> .env
-
-# Container operations will use the exact name and port you specify
-poststack container start    # Creates "my-project-postgres" on port 5434
-poststack container status   # Shows "my-project-postgres"
-```
-
-### Container Lifecycle Management
-
-Complete container lifecycle management with proper cleanup:
-
-```bash
-# Start a container (uses configured name and port)
-poststack container start
-
-# Start with custom port override
-poststack container start --postgres-port 5435
-
-# Check status
-poststack container status
-
-# Stop containers
-poststack container stop my-project-postgres
-
-# Remove stopped containers
-poststack container remove my-project-postgres
-
-# Force remove running containers
-poststack container remove --force my-project-postgres
-```
+Poststack is designed around environments as the primary way to manage your projects. Instead of managing individual containers and databases, you define environments in `.poststack.yml` and let poststack handle the rest.
 
 ### Multi-Project Support
 
-Run multiple Poststack projects simultaneously with different container names and ports:
+Each project has its own `.poststack.yml` with isolated environments:
 
 ```bash
 # Project A
 cd project-a
-echo "POSTSTACK_POSTGRES_CONTAINER_NAME=project-a-postgres" > .env
-echo "POSTSTACK_POSTGRES_HOST_PORT=5433" >> .env
-poststack container start
+# .poststack.yml defines dev environment with database project_a_dev on port 5433
+poststack env start
 
-# Project B
+# Project B  
 cd ../project-b
-echo "POSTSTACK_POSTGRES_CONTAINER_NAME=project-b-postgres" > .env
-echo "POSTSTACK_POSTGRES_HOST_PORT=5434" >> .env
-poststack container start
+# .poststack.yml defines dev environment with database project_b_dev on port 5434
+poststack env start
 
-# Both projects now have isolated PostgreSQL containers on different ports
+# Both projects run isolated environments automatically
 ```
 
 ## Project-Level Custom Containers

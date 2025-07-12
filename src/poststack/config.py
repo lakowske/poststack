@@ -63,6 +63,7 @@ class ProjectMeta(BaseModel):
 
 class PoststackProjectConfig(BaseModel):
     """Project-level configuration for environment management."""
+    environment: str = Field(..., description="Currently selected environment")
     project: ProjectMeta = Field(..., description="Project metadata")
     environments: Dict[str, EnvironmentConfig] = Field(..., description="Environment configurations")
     
@@ -71,6 +72,13 @@ class PoststackProjectConfig(BaseModel):
         """Ensure at least one environment is defined."""
         if not v:
             raise ValueError("At least one environment must be defined")
+        return v
+    
+    @validator('environment')
+    def validate_environment(cls, v, values):
+        """Ensure selected environment exists in environments."""
+        if 'environments' in values and v not in values['environments']:
+            raise ValueError(f"Selected environment '{v}' not found in environments")
         return v
 
 

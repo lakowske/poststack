@@ -159,11 +159,12 @@ class EnvironmentOrchestrator:
         try:
             env_config = self.config_parser.get_environment_config(env_name)
             
-            # Stop deployment containers
+            # Stop deployment containers - need to process templates for valid YAML
             if env_config.deployment.compose:
                 await self._stop_compose_deployment(env_config.deployment.compose, remove=remove)
             elif env_config.deployment.pod:
-                await self._stop_pod_deployment(env_config.deployment.pod, remove=remove)
+                # For pods, we need to create a processed version for stopping
+                await self._stop_pod_deployment_with_substitution(env_name, env_config, remove=remove)
             
             # Stop init containers (they should already be stopped, but cleanup just in case)
             for init_ref in env_config.init:
@@ -176,7 +177,7 @@ class EnvironmentOrchestrator:
             if not keep_postgres:
                 # Get the actual postgres status to find the correct container name
                 postgres_status = self._get_postgres_status(env_name)
-                postgres_container_name = postgres_status.get("name")
+                postgres_container_name = postgres_status.get("container_name")
                 
                 if postgres_container_name and postgres_status.get("status") != "not_running":
                     success = self.postgres_runner.stop_postgres_container(postgres_container_name)
@@ -582,6 +583,47 @@ class EnvironmentOrchestrator:
             logger.error(f"Failed to stop compose deployment {compose_file}: {e}")
             return False
     
+    async def _stop_pod_deployment_with_substitution(self, env_name: str, env_config: EnvironmentConfig, remove: bool = False) -> bool:
+        """Stop pod deployment using processed template with variable substitution."""
+        try:
+            # Get postgres info for variable substitution
+            postgres_info = None
+            try:
+                postgres_status = self._get_postgres_status(env_name)
+                if postgres_status.get("running"):
+                    # Create postgres info from running container
+                    postgres_info = PostgresInfo(
+                        config=env_config.postgres,
+                        actual_password="dummy_password_for_stop"  # Password doesn't matter for stop
+                    )
+            except:
+                pass
+            
+            if postgres_info:
+                # Create variable substitutor
+                substitutor = VariableSubstitutor(env_name, env_config, postgres_info)
+            else:
+                # Create a dummy postgres info for template processing
+                dummy_postgres = PostgresInfo(
+                    config=env_config.postgres,
+                    actual_password="dummy_password"
+                )
+                substitutor = VariableSubstitutor(env_name, env_config, dummy_postgres)
+            
+            # Process the pod file with substitution
+            pod_file = env_config.deployment.pod
+            temp_file = create_temp_processed_file(pod_file, substitutor, ".stop.processed")
+            
+            try:
+                result = await self._stop_pod_deployment(temp_file, remove=remove)
+                return result
+            finally:
+                cleanup_temp_file(temp_file)
+                
+        except Exception as e:
+            logger.error(f"Failed to stop pod deployment with substitution: {e}")
+            return False
+
     async def _stop_pod_deployment(self, pod_file: str, remove: bool = False) -> bool:
         """Stop Podman Pod deployment."""
         try:
@@ -589,9 +631,9 @@ class EnvironmentOrchestrator:
             cmd = ["podman", "play", "kube", "--down", pod_file]
             
             if remove:
-                logger.debug(f"Stopping and removing pod deployment: {pod_file}")
+                logger.info(f"Stopping and removing pod deployment: {pod_file}")
             else:
-                logger.debug(f"Stopping pod deployment: {pod_file}")
+                logger.info(f"Stopping pod deployment: {pod_file}")
             
             process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -601,6 +643,11 @@ class EnvironmentOrchestrator:
             
             stdout, _ = await process.communicate()
             success = process.returncode == 0
+            
+            if stdout:
+                logger.info(f"Pod stop output: {stdout.decode('utf-8')}")
+            if not success:
+                logger.warning(f"Pod stop failed with exit code {process.returncode}")
             
             # If remove flag is set and stop was successful, force remove any remaining pod
             if remove and success:
@@ -665,9 +712,11 @@ class EnvironmentOrchestrator:
                 # Check for exact match or if the environment database name is in the container name
                 if (container_name == expected_container_name or 
                     env_config.postgres.database in container_name):
+                    status = container.get("status", "unknown").lower()
                     return {
-                        "name": container_name,
+                        "container_name": container_name,
                         "status": container.get("status", "unknown"),
+                        "running": status == "running" or status == "up",
                         "port": container.get("host_port"),
                         "database": container.get("database"),
                         "image": container.get("image")
@@ -678,24 +727,27 @@ class EnvironmentOrchestrator:
             for container in containers:
                 container_name = container.get("name", "")
                 if container_name == simple_container_name:
+                    status = container.get("status", "unknown").lower()
                     return {
-                        "name": container_name,
+                        "container_name": container_name,
                         "status": container.get("status", "unknown"),
+                        "running": status == "running" or status == "up",
                         "port": container.get("host_port"),
                         "database": container.get("database"),
                         "image": container.get("image")
                     }
             
             return {
-                "name": expected_container_name, 
+                "container_name": expected_container_name, 
                 "status": "not_running",
+                "running": False,
                 "expected_name": expected_container_name,
                 "simple_name": simple_container_name
             }
             
         except Exception as e:
             logger.error(f"Failed to get postgres status for {env_name}: {e}")
-            return {"name": f"poststack-postgres-{env_name}", "status": "error", "error": str(e)}
+            return {"container_name": f"poststack-postgres-{env_name}", "status": "error", "running": False, "error": str(e)}
     
     async def _get_compose_status(self, compose_file: str) -> List[Dict]:
         """Get status of Docker Compose services."""
@@ -738,7 +790,28 @@ class EnvironmentOrchestrator:
             
             if process.returncode == 0 and stdout:
                 import json
-                return json.loads(stdout.decode('utf-8'))
+                containers = json.loads(stdout.decode('utf-8'))
+                
+                # Convert to expected format
+                formatted_containers = []
+                for container in containers:
+                    # Skip infra containers
+                    if container.get("IsInfra", False):
+                        continue
+                        
+                    state = container.get("State", "unknown").lower()
+                    names = container.get("Names", [])
+                    name = names[0] if names else "unknown"
+                    
+                    formatted_containers.append({
+                        "name": name,
+                        "status": container.get("Status", "unknown"),
+                        "running": state == "running",
+                        "image": container.get("Image", ""),
+                        "state": state
+                    })
+                
+                return formatted_containers
             else:
                 return []
                 
