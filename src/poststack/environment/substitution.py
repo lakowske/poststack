@@ -11,52 +11,18 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from ..config import EnvironmentConfig, PostgresConfig, VolumeConfig
+from ..config import EnvironmentConfig, VolumeConfig
 
 logger = logging.getLogger(__name__)
-
-
-class PostgresInfo:
-    """Container for postgres connection information."""
-    
-    def __init__(self, config: PostgresConfig, actual_password: str):
-        self.config = config
-        self.actual_password = actual_password
-    
-    @property
-    def database_url(self) -> str:
-        """Get the full database URL."""
-        return self.config.get_database_url(self.actual_password)
-    
-    @property
-    def host(self) -> str:
-        return self.config.host
-    
-    @property
-    def port(self) -> int:
-        return self.config.port
-    
-    @property
-    def database(self) -> str:
-        return self.config.database
-    
-    @property
-    def user(self) -> str:
-        return self.config.user
-    
-    @property
-    def password(self) -> str:
-        return self.actual_password
 
 
 class VariableSubstitutor:
     """Engine for processing template files with variable substitution."""
     
-    def __init__(self, environment_name: str, environment_config: EnvironmentConfig, postgres_info: PostgresInfo, project_name: str = "poststack"):
-        """Initialize substitutor with environment configuration and postgres info."""
+    def __init__(self, environment_name: str, environment_config: EnvironmentConfig, project_name: str = "poststack"):
+        """Initialize substitutor with environment configuration."""
         self.environment_name = environment_name
         self.environment_config = environment_config
-        self.postgres_info = postgres_info
         self.project_name = project_name
         self.variables = self._build_variable_map()
         
@@ -66,8 +32,10 @@ class VariableSubstitutor:
         """Build complete variable map from all sources."""
         variables = {}
         
-        # Add poststack-provided variables
-        variables.update(self._get_poststack_variables())
+        # PostgreSQL variables removed - auto-detection will be handled at runtime
+        
+        # Add basic environment variables
+        variables.update(self._get_basic_variables())
         
         # Add volume variables
         variables.update(self._get_volume_variables())
@@ -80,17 +48,13 @@ class VariableSubstitutor:
         
         return variables
     
-    def _get_poststack_variables(self) -> Dict[str, str]:
-        """Get standard poststack-provided variables."""
+    def _get_basic_variables(self) -> Dict[str, str]:
+        """Get basic environment variables without PostgreSQL dependency."""
         return {
-            "POSTSTACK_DATABASE_URL": self.postgres_info.database_url,
-            "POSTSTACK_ENVIRONMENT": self.environment_name,
-            "POSTSTACK_DB_HOST": self.postgres_info.host,
-            "POSTSTACK_DB_PORT": str(self.postgres_info.port),
-            "POSTSTACK_DB_NAME": self.postgres_info.database,
-            "POSTSTACK_DB_USER": self.postgres_info.user,
-            "POSTSTACK_DB_PASSWORD": self.postgres_info.password,
+            "ENVIRONMENT": self.environment_name,
+            "PROJECT": self.project_name,
         }
+    
     
     def _get_system_variables(self) -> Dict[str, str]:
         """Get system environment variables that start with POSTSTACK_."""

@@ -265,7 +265,7 @@ def env_stop(ctx: click.Context, environment: Optional[str], keep_postgres: bool
         click.echo(f"{action} environment: {environment}")
         
         orchestrator = EnvironmentOrchestrator(config)
-        success = asyncio.run(orchestrator.stop_environment(environment, keep_postgres=keep_postgres, remove=rm))
+        success = asyncio.run(orchestrator.stop_environment(environment, remove=rm))
         
         if success:
             action_text = "stopped and removed" if rm else "stopped"
@@ -300,7 +300,7 @@ def env_restart(ctx: click.Context, environment: Optional[str]) -> None:
         
         # Stop first (restart should always remove containers for clean start)
         orchestrator = EnvironmentOrchestrator(config)
-        stop_success = asyncio.run(orchestrator.stop_environment(environment, keep_postgres=False, remove=True))
+        stop_success = asyncio.run(orchestrator.stop_environment(environment, remove=True))
         
         if not stop_success:
             click.echo(f"⚠️  Some containers failed to stop and remove cleanly, continuing with restart...")

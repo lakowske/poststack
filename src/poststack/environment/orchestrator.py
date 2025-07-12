@@ -16,10 +16,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from ..config import EnvironmentConfig, PoststackConfig
+from ..config import EnvironmentConfig, PoststackConfig, DeploymentRef
 from ..container_runtime import PostgreSQLRunner
+from ..models import RuntimeStatus
 from .config import EnvironmentConfigParser
-from .substitution import VariableSubstitutor, PostgresInfo, create_temp_processed_file, cleanup_temp_file
+from .substitution import VariableSubstitutor, create_temp_processed_file, cleanup_temp_file
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +41,8 @@ class EnvironmentResult:
     """Complete result of environment deployment."""
     environment_name: str
     success: bool
-    postgres_started: bool
     init_results: List[PhaseResult]
-    deployment_result: Optional[PhaseResult]
+    deployment_results: List[PhaseResult]
     error_message: Optional[str] = None
     total_duration: Optional[float] = None
 
@@ -81,12 +81,8 @@ class EnvironmentOrchestrator:
             if not volume_success:
                 raise RuntimeError(f"Failed to create required volumes for environment: {env_name}")
             
-            # Start PostgreSQL database
-            postgres_info = await self._setup_postgres(env_config)
-            postgres_started = True
-            
-            # Create variable substitutor
-            substitutor = VariableSubstitutor(env_name, env_config, postgres_info, project_config.project.name)
+            # Create variable substitutor with environment variables
+            substitutor = VariableSubstitutor(env_name, env_config, project_config.project.name)
             
             # Run init phase
             init_results = await self._run_init_phase(env_config, substitutor)
@@ -100,9 +96,8 @@ class EnvironmentOrchestrator:
                 return EnvironmentResult(
                     environment_name=env_name,
                     success=False,
-                    postgres_started=postgres_started,
                     init_results=init_results,
-                    deployment_result=None,
+                    deployment_results=[],
                     error_message=error_msg,
                     total_duration=asyncio.get_event_loop().time() - start_time
                 )
@@ -113,25 +108,23 @@ class EnvironmentOrchestrator:
                 return EnvironmentResult(
                     environment_name=env_name,
                     success=True,
-                    postgres_started=postgres_started,
                     init_results=init_results,
-                    deployment_result=None,
+                    deployment_results=[],
                     total_duration=asyncio.get_event_loop().time() - start_time
                 )
             
-            # Run deployment phase
-            deployment_result = await self._run_deployment_phase(env_config, substitutor)
+            # Run deployment phase (process multiple deployments)
+            deployment_results = await self._run_deployments_phase(env_config, substitutor)
             
-            success = deployment_result.success if deployment_result else False
+            success = all(result.success for result in deployment_results) if deployment_results else False
             
             logger.info(f"Environment deployment completed: {env_name} (success: {success})")
             
             return EnvironmentResult(
                 environment_name=env_name,
                 success=success,
-                postgres_started=postgres_started,
                 init_results=init_results,
-                deployment_result=deployment_result,
+                deployment_results=deployment_results,
                 total_duration=asyncio.get_event_loop().time() - start_time
             )
             
@@ -140,20 +133,18 @@ class EnvironmentOrchestrator:
             return EnvironmentResult(
                 environment_name=env_name,
                 success=False,
-                postgres_started=False,
                 init_results=[],
-                deployment_result=None,
+                deployment_results=[],
                 error_message=str(e),
                 total_duration=asyncio.get_event_loop().time() - start_time
             )
     
-    async def stop_environment(self, env_name: str, keep_postgres: bool = False, remove: bool = False) -> bool:
+    async def stop_environment(self, env_name: str, remove: bool = False) -> bool:
         """
         Stop all containers for an environment.
         
         Args:
             env_name: Environment name to stop
-            keep_postgres: If True, don't stop postgres database
             remove: If True, remove containers after stopping (--rm flag)
             
         Returns:
@@ -164,13 +155,20 @@ class EnvironmentOrchestrator:
         
         try:
             env_config = self.config_parser.get_environment_config(env_name)
+            project_config = self.config_parser.load_project_config()
             
-            # Stop deployment containers - need to process templates for valid YAML
-            if env_config.deployment.compose:
-                await self._stop_compose_deployment(env_config.deployment.compose, remove=remove)
-            elif env_config.deployment.pod:
-                # For pods, we need to create a processed version for stopping
-                await self._stop_pod_deployment_with_substitution(env_name, env_config, remove=remove)
+            # Create variable substitutor for processing stop templates
+            substitutor = VariableSubstitutor(env_name, env_config, project_config.project.name)
+            
+            # Stop deployment containers in reverse order
+            for deployment in reversed(env_config.deployments):
+                if deployment.enabled:
+                    if deployment.compose:
+                        await self._stop_compose_deployment(deployment.compose, remove=remove)
+                    elif deployment.pod:
+                        # Create deployment-specific substitutor
+                        deployment_substitutor = self._create_deployment_substitutor(substitutor, deployment)
+                        await self._stop_pod_deployment_with_substitution(deployment_substitutor, deployment.pod, remove=remove)
             
             # Stop init containers (they should already be stopped, but cleanup just in case)
             for init_ref in env_config.init:
@@ -178,29 +176,6 @@ class EnvironmentOrchestrator:
                     await self._stop_compose_deployment(init_ref.compose, remove=remove)
                 elif init_ref.pod:
                     await self._stop_pod_deployment(init_ref.pod, remove=remove)
-            
-            # Stop postgres if requested
-            if not keep_postgres:
-                # Get the actual postgres status to find the correct container name
-                postgres_status = self._get_postgres_status(env_name)
-                postgres_container_name = postgres_status.get("container_name")
-                
-                if postgres_container_name and postgres_status.get("status") != "not_running":
-                    success = self.postgres_runner.stop_postgres_container(postgres_container_name)
-                    if success:
-                        logger.info(f"Stopped postgres container: {postgres_container_name}")
-                        
-                        # Remove container if --rm flag specified
-                        if remove:
-                            removal_success = self.postgres_runner.remove_postgres_container(postgres_container_name)
-                            if removal_success:
-                                logger.info(f"Removed postgres container: {postgres_container_name}")
-                            else:
-                                logger.warning(f"Failed to remove postgres container: {postgres_container_name}")
-                    else:
-                        logger.warning(f"Failed to stop postgres container: {postgres_container_name}")
-                else:
-                    logger.info(f"No running postgres container found for environment: {env_name}")
             
             status = "stopped and cleaned" if remove else "stopped"
             logger.info(f"Environment {status}: {env_name}")
@@ -214,21 +189,33 @@ class EnvironmentOrchestrator:
         """Get status of all containers in an environment."""
         try:
             env_config = self.config_parser.get_environment_config(env_name)
+            project_config = self.config_parser.load_project_config()
             
-            status = {
-                "environment": env_name,
-                "postgres": self._get_postgres_status(env_name),
-                "init_containers": [],
-                "deployment_containers": []
-            }
+            # Get PostgreSQL status first
+            postgres_status = await self._get_postgres_status(env_name, env_config, project_config)
+            
+            # Collect all deployment containers into a flat list for the expected format
+            deployment_containers = []
             
             # Check deployment containers
-            if env_config.deployment.compose:
-                deployment_status = await self._get_compose_status(env_config.deployment.compose)
-                status["deployment_containers"] = deployment_status
-            elif env_config.deployment.pod:
-                deployment_status = await self._get_pod_status(env_config.deployment.pod)
-                status["deployment_containers"] = deployment_status
+            for deployment in env_config.deployments:
+                if deployment.enabled:
+                    if deployment.compose:
+                        deployment_status = await self._get_compose_status(deployment.compose)
+                    elif deployment.pod:
+                        deployment_status = await self._get_pod_status(deployment.pod)
+                    else:
+                        deployment_status = []
+                    
+                    # Add containers to the flat list
+                    deployment_containers.extend(deployment_status)
+            
+            # Return status in the format expected by CLI
+            status = {
+                "environment": env_name,
+                "postgres": postgres_status,
+                "deployment_containers": deployment_containers
+            }
             
             return status
             
@@ -236,61 +223,45 @@ class EnvironmentOrchestrator:
             logger.error(f"Failed to get environment status for {env_name}: {e}")
             return {"environment": env_name, "error": str(e)}
     
-    async def _setup_postgres(self, env_config: EnvironmentConfig) -> PostgresInfo:
-        """Setup PostgreSQL database for environment with smart container detection."""
-        postgres_config = env_config.postgres
+    async def _get_postgres_status(self, env_name: str, env_config: EnvironmentConfig, project_config) -> Dict:
+        """Get PostgreSQL container status for the environment."""
+        # Generate PostgreSQL container name pattern: {project}-postgres-{environment}
+        postgres_container_name = f"{project_config.project.name}-postgres-{env_name}"
         
-        # Generate password if needed
-        if postgres_config.password == "auto_generated":
-            import secrets
-            import string
-            alphabet = string.ascii_letters + string.digits
-            actual_password = ''.join(secrets.choice(alphabet) for _ in range(16))
-        else:
-            actual_password = postgres_config.password
-        
-        # Container name pattern
-        container_name = f"poststack-postgres-{postgres_config.database}"
-        
-        logger.info(f"Setting up PostgreSQL database: {postgres_config.database} on port {postgres_config.port}")
-        
-        # Check for existing container (using the actual container name pattern)
-        existing_container = self.postgres_runner.find_postgres_container_by_env(container_name)
-        
-        if existing_container:
-            container_status = existing_container.get('status', '').lower()
-            existing_name = existing_container.get('name', container_name)
+        try:
+            # Use the postgres runner to get container status
+            postgres_result = self.postgres_runner.get_container_status(postgres_container_name)
             
-            if container_status == 'running':
-                logger.info(f"Found running PostgreSQL container: {existing_name}")
-                return PostgresInfo(postgres_config, actual_password)
-            elif container_status in ['stopped', 'exited']:
-                logger.info(f"Found stopped PostgreSQL container {existing_name}, restarting...")
-                success = self.postgres_runner.restart_postgres_container(existing_name)
-                if success:
-                    logger.info(f"Successfully restarted PostgreSQL container: {existing_name}")
-                    return PostgresInfo(postgres_config, actual_password)
-                else:
-                    logger.warning(f"Failed to restart container {existing_name}, removing and recreating...")
-                    self.postgres_runner.remove_postgres_container(existing_name, force=True)
+            if postgres_result and postgres_result.status == RuntimeStatus.RUNNING:
+                # Get PostgreSQL port from environment config
+                postgres_port = "5432"  # default
+                for deployment in env_config.deployments:
+                    if deployment.get_deployment_name() == "postgres":
+                        postgres_port = deployment.variables.get("DB_PORT", "5432")
+                        break
+                
+                return {
+                    "running": True,
+                    "container_name": postgres_container_name,
+                    "port": postgres_port,
+                    "status": "running"
+                }
             else:
-                logger.warning(f"PostgreSQL container {existing_name} in unexpected state '{container_status}', removing and recreating...")
-                self.postgres_runner.remove_postgres_container(existing_name, force=True)
-        
-        # Create new container (either no existing container or cleanup was needed)
-        logger.info(f"Creating new PostgreSQL container: {container_name}")
-        success = self.postgres_runner.start_postgres_container(
-            container_name=container_name,
-            port=postgres_config.port,
-            database_name=postgres_config.database,
-            username=postgres_config.user,
-            password=actual_password
-        )
-        
-        if not success:
-            raise RuntimeError(f"Failed to start PostgreSQL container: {container_name}")
-        
-        return PostgresInfo(postgres_config, actual_password)
+                return {
+                    "running": False,
+                    "container_name": postgres_container_name,
+                    "port": None,
+                    "status": "not running" if postgres_result else "not found"
+                }
+                
+        except Exception as e:
+            logger.error(f"Failed to get PostgreSQL status for {env_name}: {e}")
+            return {
+                "running": False,
+                "container_name": postgres_container_name,
+                "port": None,
+                "status": f"error: {e}"
+            }
     
     async def _run_init_phase(self, env_config: EnvironmentConfig, substitutor: VariableSubstitutor) -> List[PhaseResult]:
         """Run initialization phase containers."""
@@ -326,24 +297,105 @@ class EnvironmentOrchestrator:
         
         return results
     
-    async def _run_deployment_phase(self, env_config: EnvironmentConfig, substitutor: VariableSubstitutor) -> Optional[PhaseResult]:
-        """Run main deployment phase."""
-        logger.info("Running deployment phase")
+    async def _run_deployments_phase(self, env_config: EnvironmentConfig, substitutor: VariableSubstitutor) -> List[PhaseResult]:
+        """Run multiple deployments phase."""
+        logger.info("Running deployments phase")
         
-        if env_config.deployment.compose:
-            return await self._run_compose_deployment(env_config.deployment.compose, substitutor)
-        elif env_config.deployment.pod:
-            return await self._run_pod_deployment(env_config.deployment.pod, substitutor)
-        else:
-            logger.error("No deployment configuration specified")
-            return PhaseResult(
-                success=False,
-                exit_code=-1,
-                duration=0.0,
-                logs="No deployment file specified",
-                command="",
-                file_path=""
-            )
+        if not env_config.deployments:
+            logger.warning("No deployments configured for environment")
+            return []
+        
+        results = []
+        
+        # Process deployments with dependency resolution
+        deployed_services = set()
+        remaining_deployments = env_config.deployments.copy()
+        
+        while remaining_deployments:
+            # Find deployments that can be started (all dependencies satisfied)
+            ready_deployments = []
+            for deployment in remaining_deployments:
+                if deployment.enabled and all(dep in deployed_services for dep in deployment.depends_on):
+                    ready_deployments.append(deployment)
+            
+            if not ready_deployments:
+                # Check if we have circular dependencies or missing dependencies
+                remaining_deps = {dep for d in remaining_deployments for dep in d.depends_on if dep not in deployed_services}
+                available_services = {d.get_deployment_name() for d in remaining_deployments}
+                missing_deps = remaining_deps - available_services
+                
+                if missing_deps:
+                    error_msg = f"Missing dependencies: {missing_deps}"
+                    logger.error(error_msg)
+                    results.append(PhaseResult(
+                        success=False,
+                        exit_code=-1,
+                        duration=0.0,
+                        logs=error_msg,
+                        command="",
+                        file_path=""
+                    ))
+                    break
+                else:
+                    error_msg = f"Circular dependency detected in deployments"
+                    logger.error(error_msg)
+                    results.append(PhaseResult(
+                        success=False,
+                        exit_code=-1,
+                        duration=0.0,
+                        logs=error_msg,
+                        command="",
+                        file_path=""
+                    ))
+                    break
+            
+            # Deploy ready services
+            for deployment in ready_deployments:
+                logger.info(f"Deploying service: {deployment.get_deployment_name()}")
+                
+                # Create deployment-specific substitutor with merged variables
+                deployment_substitutor = self._create_deployment_substitutor(substitutor, deployment)
+                
+                if deployment.compose:
+                    result = await self._run_compose_deployment(deployment.compose, deployment_substitutor)
+                elif deployment.pod:
+                    result = await self._run_pod_deployment(deployment.pod, deployment_substitutor)
+                else:
+                    result = PhaseResult(
+                        success=False,
+                        exit_code=-1,
+                        duration=0.0,
+                        logs="No deployment file specified",
+                        command="",
+                        file_path=""
+                    )
+                
+                results.append(result)
+                if result.success:
+                    deployed_services.add(deployment.get_deployment_name())
+                
+                # Remove from remaining deployments
+                remaining_deployments.remove(deployment)
+        
+        return results
+    
+    def _create_deployment_substitutor(self, base_substitutor: VariableSubstitutor, deployment: DeploymentRef) -> VariableSubstitutor:
+        """Create a deployment-specific variable substitutor."""
+        # Create a new substitutor with deployment-specific variables
+        deployment_variables = base_substitutor.get_all_variables().copy()
+        deployment_variables.update(deployment.variables)
+        
+        # Create new substitutor instance with merged variables
+        new_substitutor = VariableSubstitutor(
+            base_substitutor.environment_name,
+            base_substitutor.environment_config,
+            base_substitutor.project_name
+        )
+        
+        # Override variables with deployment-specific ones
+        new_substitutor.variables.update(deployment_variables)
+        
+        return new_substitutor
     
     async def _run_compose_init(self, compose_file: str, substitutor: VariableSubstitutor, index: int) -> PhaseResult:
         """Run a Docker Compose init container and wait for completion."""
@@ -589,38 +641,10 @@ class EnvironmentOrchestrator:
             logger.error(f"Failed to stop compose deployment {compose_file}: {e}")
             return False
     
-    async def _stop_pod_deployment_with_substitution(self, env_name: str, env_config: EnvironmentConfig, remove: bool = False) -> bool:
+    async def _stop_pod_deployment_with_substitution(self, substitutor: VariableSubstitutor, pod_file: str, remove: bool = False) -> bool:
         """Stop pod deployment using processed template with variable substitution."""
         try:
-            # Get project configuration for variable substitution
-            project_config = self.config_parser.load_project_config()
-            
-            # Get postgres info for variable substitution
-            postgres_info = None
-            try:
-                postgres_status = self._get_postgres_status(env_name)
-                if postgres_status.get("running"):
-                    # Create postgres info from running container
-                    postgres_info = PostgresInfo(
-                        config=env_config.postgres,
-                        actual_password="dummy_password_for_stop"  # Password doesn't matter for stop
-                    )
-            except:
-                pass
-            
-            if postgres_info:
-                # Create variable substitutor
-                substitutor = VariableSubstitutor(env_name, env_config, postgres_info, project_config.project.name)
-            else:
-                # Create a dummy postgres info for template processing
-                dummy_postgres = PostgresInfo(
-                    config=env_config.postgres,
-                    actual_password="dummy_password"
-                )
-                substitutor = VariableSubstitutor(env_name, env_config, dummy_postgres, project_config.project.name)
-            
             # Process the pod file with substitution
-            pod_file = env_config.deployment.pod
             temp_file = create_temp_processed_file(pod_file, substitutor, ".stop.processed")
             
             try:
@@ -702,61 +726,6 @@ class EnvironmentOrchestrator:
             logger.debug(f"Could not force remove pod from {pod_file}: {e}")
             return False
     
-    def _get_postgres_status(self, env_name: str) -> Dict:
-        """Get PostgreSQL container status for environment."""
-        try:
-            # Environment-specific containers use the database name as part of the container name
-            env_config = self.config_parser.get_environment_config(env_name)
-            expected_container_name = f"poststack-postgres-{env_config.postgres.database}"
-            
-            # Use existing postgres runner to check status
-            containers = self.postgres_runner.list_postgres_containers()
-            
-            logger.debug(f"Looking for container '{expected_container_name}' in {len(containers)} postgres containers")
-            
-            for container in containers:
-                container_name = container.get("name", "")
-                logger.debug(f"Checking container: {container_name}")
-                
-                # Check for exact match or if the environment database name is in the container name
-                if (container_name == expected_container_name or 
-                    env_config.postgres.database in container_name):
-                    status = container.get("status", "unknown").lower()
-                    return {
-                        "container_name": container_name,
-                        "status": container.get("status", "unknown"),
-                        "running": status == "running" or status == "up",
-                        "port": container.get("host_port"),
-                        "database": container.get("database"),
-                        "image": container.get("image")
-                    }
-            
-            # Also check for containers that might be using a simpler naming pattern
-            simple_container_name = f"poststack-postgres-{env_name}"
-            for container in containers:
-                container_name = container.get("name", "")
-                if container_name == simple_container_name:
-                    status = container.get("status", "unknown").lower()
-                    return {
-                        "container_name": container_name,
-                        "status": container.get("status", "unknown"),
-                        "running": status == "running" or status == "up",
-                        "port": container.get("host_port"),
-                        "database": container.get("database"),
-                        "image": container.get("image")
-                    }
-            
-            return {
-                "container_name": expected_container_name, 
-                "status": "not_running",
-                "running": False,
-                "expected_name": expected_container_name,
-                "simple_name": simple_container_name
-            }
-            
-        except Exception as e:
-            logger.error(f"Failed to get postgres status for {env_name}: {e}")
-            return {"container_name": f"poststack-postgres-{env_name}", "status": "error", "running": False, "error": str(e)}
     
     async def _get_compose_status(self, compose_file: str) -> List[Dict]:
         """Get status of Docker Compose services."""
@@ -881,12 +850,17 @@ class EnvironmentOrchestrator:
             if volume_config.size:
                 cmd.extend(["--opt", f"size={volume_config.size}"])
             
-            # Add user permissions for rootless podman
-            # This ensures volumes are accessible by containers
-            import os
-            uid = os.getuid()
-            gid = os.getgid()
-            cmd.extend(["--opt", f"o=uid={uid},gid={gid}"])
+            # Don't set specific UID/GID for PostgreSQL volumes to avoid permission issues
+            # PostgreSQL container handles directory setup internally
+            postgres_volume_patterns = ['postgres_data', 'postgres_logs', 'postgres_config']
+            is_postgres_volume = any(pattern in volume_name for pattern in postgres_volume_patterns)
+            
+            if not is_postgres_volume:
+                # Add user permissions for rootless podman for non-postgres volumes
+                import os
+                uid = os.getuid()
+                gid = os.getgid()
+                cmd.extend(["--opt", f"o=uid={uid},gid={gid}"])
             
             cmd.append(volume_name)
             

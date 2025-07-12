@@ -16,23 +16,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 logger = logging.getLogger(__name__)
 
 
-class DeploymentRef(BaseModel):
-    """Reference to a deployment file (compose or pod)."""
-    compose: Optional[str] = Field(None, description="Path to Docker Compose file")
-    pod: Optional[str] = Field(None, description="Path to Podman Pod YAML file")
-    
-    @validator('compose', 'pod')
-    def validate_deployment_ref(cls, v, values):
-        """Ensure exactly one deployment type is specified."""
-        # This will be called for each field, but we need to check the final state
-        return v
-    
-    def model_post_init(self, __context) -> None:
-        """Validate that exactly one deployment type is specified."""
-        if not (bool(self.compose) ^ bool(self.pod)):
-            raise ValueError("Exactly one of 'compose' or 'pod' must be specified")
-
-
 class VolumeConfig(BaseModel):
     """Volume configuration for container storage."""
     type: str = Field("emptyDir", description="Volume type: emptyDir, named, hostPath")
@@ -57,27 +40,55 @@ class VolumeConfig(BaseModel):
         return v
 
 
-class PostgresConfig(BaseModel):
-    """PostgreSQL database configuration for an environment."""
-    database: str = Field(..., description="Database name")
-    port: int = Field(5432, description="Host port for database")
-    user: str = Field("poststack", description="Database user")
-    password: str = Field("auto_generated", description="Database password (auto-generated if 'auto_generated')")
-    host: str = Field("localhost", description="Database host")
+class DeploymentRef(BaseModel):
+    """Reference to a deployment file with per-deployment configuration."""
+    # Core deployment reference
+    compose: Optional[str] = Field(None, description="Path to Docker Compose file")
+    pod: Optional[str] = Field(None, description="Path to Podman Pod YAML file")
     
-    def get_database_url(self, actual_password: str) -> str:
-        """Generate database URL with actual password."""
-        password = actual_password if self.password == "auto_generated" else self.password
-        return f"postgresql://{self.user}:{password}@{self.host}:{self.port}/{self.database}"
+    # Per-deployment configuration
+    name: Optional[str] = Field(None, description="Custom name for this deployment")
+    depends_on: List[str] = Field(default_factory=list, description="Dependencies on other deployments")
+    variables: Dict[str, str] = Field(default_factory=dict, description="Deployment-specific variables")
+    volumes: Dict[str, VolumeConfig] = Field(default_factory=dict, description="Deployment-specific volumes")
+    enabled: bool = Field(True, description="Whether this deployment is enabled")
+    restart_policy: Optional[str] = Field(None, description="Custom restart policy for this deployment")
+    
+    @validator('compose', 'pod')
+    def validate_deployment_ref(cls, v, values):
+        """Ensure exactly one deployment type is specified."""
+        # This will be called for each field, but we need to check the final state
+        return v
+    
+    def model_post_init(self, __context) -> None:
+        """Validate that exactly one deployment type is specified."""
+        if not (bool(self.compose) ^ bool(self.pod)):
+            raise ValueError("Exactly one of 'compose' or 'pod' must be specified")
+    
+    def get_deployment_path(self) -> str:
+        """Get the deployment file path."""
+        return self.compose or self.pod
+    
+    def get_deployment_name(self) -> str:
+        """Get the deployment name (custom name or derived from file)."""
+        if self.name:
+            return self.name
+        
+        # Derive name from file path
+        path = self.get_deployment_path()
+        if path:
+            from pathlib import Path
+            return Path(path).stem.replace('-pod', '').replace('-compose', '')
+        
+        return "unknown"
 
 
 class EnvironmentConfig(BaseModel):
     """Configuration for a specific environment (dev, staging, production)."""
-    postgres: PostgresConfig = Field(..., description="PostgreSQL configuration")
+    deployments: List[DeploymentRef] = Field(default_factory=list, description="List of deployments with configuration")
     init: List[DeploymentRef] = Field(default_factory=list, description="Initialization deployments (run first)")
-    deployment: DeploymentRef = Field(..., description="Main application deployment")
-    variables: Dict[str, str] = Field(default_factory=dict, description="Environment-specific variables")
-    volumes: Dict[str, VolumeConfig] = Field(default_factory=dict, description="Volume configurations for container storage")
+    variables: Dict[str, str] = Field(default_factory=dict, description="Environment-wide variables")
+    volumes: Dict[str, VolumeConfig] = Field(default_factory=dict, description="Environment-wide volumes")
 
 
 class ProjectMeta(BaseModel):

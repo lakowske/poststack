@@ -66,10 +66,11 @@ class EnvironmentConfigParser:
                 if not Path(file_path).exists():
                     errors.append(f"Environment '{env_name}' init[{i}]: {file_path} not found")
             
-            # Validate main deployment file
-            deployment_file = env_config.deployment.compose or env_config.deployment.pod
-            if not Path(deployment_file).exists():
-                errors.append(f"Environment '{env_name}' deployment: {deployment_file} not found")
+            # Validate deployment files
+            for i, deployment in enumerate(env_config.deployments):
+                deployment_file = deployment.compose or deployment.pod
+                if not Path(deployment_file).exists():
+                    errors.append(f"Environment '{env_name}' deployment[{i}]: {deployment_file} not found")
         
         if errors:
             error_msg = "Deployment file validation failed:\n" + "\n".join(f"  - {err}" for err in errors)
