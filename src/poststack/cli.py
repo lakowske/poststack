@@ -12,6 +12,7 @@ import click
 
 from .config import PoststackConfig, load_config
 from .database import database
+from .volumes import volumes
 from .logging_config import setup_logging
 from .project_containers import discover_project_containers
 from .real_container_builder import RealContainerBuilder
@@ -448,6 +449,7 @@ def env_switch(ctx: click.Context, environment: str) -> None:
 
 # Database operations (rename from 'database' to 'db')
 cli.add_command(database, name="db")
+cli.add_command(volumes, name="volumes")
 
 
 # Add missing import
