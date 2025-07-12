@@ -842,7 +842,7 @@ class EnvironmentOrchestrator:
             return False
     
     async def _create_volume(self, volume_name: str, volume_config) -> bool:
-        """Create a named volume."""
+        """Create a named volume without host UID/GID constraints."""
         try:
             cmd = [self.poststack_config.container_runtime, "volume", "create"]
             
@@ -850,18 +850,8 @@ class EnvironmentOrchestrator:
             if volume_config.size:
                 cmd.extend(["--opt", f"size={volume_config.size}"])
             
-            # Don't set specific UID/GID for PostgreSQL volumes to avoid permission issues
-            # PostgreSQL container handles directory setup internally
-            postgres_volume_patterns = ['postgres_data', 'postgres_logs', 'postgres_config']
-            is_postgres_volume = any(pattern in volume_name for pattern in postgres_volume_patterns)
-            
-            if not is_postgres_volume:
-                # Add user permissions for rootless podman for non-postgres volumes
-                import os
-                uid = os.getuid()
-                gid = os.getgid()
-                cmd.extend(["--opt", f"o=uid={uid},gid={gid}"])
-            
+            # Don't set UID/GID - containers handle permissions internally
+            # or via init containers when needed
             cmd.append(volume_name)
             
             process = await asyncio.create_subprocess_exec(
