@@ -2,13 +2,20 @@
 
 ## Overview
 
-Poststack is a Python framework for managing PostgreSQL containers and database schema migrations. It provides a unified CLI for container management, project-level custom containers, and SQL-based schema migration with full rollback support.
+Poststack is a Python framework for managing PostgreSQL containers and database schema migrations with comprehensive multi-environment orchestration. It provides a unified CLI for environment management, container orchestration, and SQL-based schema migration with full rollback support.
+
+**Key Features:**
+- **Environment Management**: Multi-environment deployment (dev/staging/production) with automatic database provisioning
+- **Variable Substitution**: Template-based configuration for Docker Compose and Podman Pod files  
+- **PostgreSQL Integration**: Automatic database setup and configuration injection per environment
+- **Standard Deployment Files**: Use familiar deployment formats with poststack's database management
+- **Schema Migrations**: SQL-based migrations with full rollback support
 
 ## Getting Started
 
 Poststack features a powerful CLI that handles PostgreSQL container building, database setup, and schema management. All operations are logged for transparency and debugging.
 
-### Quick Start
+### Quick Start (Environment Management - Recommended)
 
 1. **Install Prerequisites**
    - Python 3.9+
@@ -20,7 +27,59 @@ Poststack features a powerful CLI that handles PostgreSQL container building, da
    pip install poststack
    ```
 
-3. **Build and Start PostgreSQL Container**
+3. **Create Environment Configuration** (.poststack.yml):
+   ```yaml
+   project:
+     name: myproject
+   
+   environments:
+     dev:
+       postgres:
+         database: myproject_dev
+         port: 5433
+         user: myproject_dev_user
+         password: auto_generated
+       deployment:
+         pod: deploy/app-pod.yaml
+       variables:
+         LOG_LEVEL: debug
+         APP_PORT: "8080"
+   ```
+
+4. **Create Deployment File** (deploy/app-pod.yaml):
+   ```yaml
+   apiVersion: v1
+   kind: Pod
+   metadata:
+     name: myproject-${POSTSTACK_ENVIRONMENT}
+   spec:
+     containers:
+     - name: app
+       image: myapp:latest
+       env:
+       - name: DATABASE_URL
+         value: "${POSTSTACK_DATABASE_URL}"
+       - name: LOG_LEVEL
+         value: "${LOG_LEVEL}"
+   ```
+
+5. **Deploy Environment**
+   ```bash
+   # Preview deployment
+   poststack env dry-run dev
+   
+   # Start development environment
+   poststack env start dev
+   
+   # Check status
+   poststack env status dev
+   ```
+
+### Quick Start (Legacy Container Commands)
+
+For existing users or simple use cases:
+
+1. **Build and Start PostgreSQL Container**
    ```bash
    # Build PostgreSQL container image
    poststack container build
@@ -29,7 +88,7 @@ Poststack features a powerful CLI that handles PostgreSQL container building, da
    poststack container start --postgres-port 5433
    ```
 
-4. **Initialize Database Schema**
+2. **Initialize Database Schema**
    ```bash
    # Initialize database schema
    poststack database create-schema --url "postgresql://poststack:poststack_dev@localhost:5433/poststack"
@@ -38,11 +97,14 @@ Poststack features a powerful CLI that handles PostgreSQL container building, da
    poststack database migrate --url "postgresql://poststack:poststack_dev@localhost:5433/poststack"
    ```
 
-5. **Monitor Progress**
-   - All operations log progress to stdout/stderr
-   - Detailed logs are written to the `logs/` directory
-   - Container builds logged to `logs/containers/`
-   - Database operations logged to `logs/database/`
+### Monitoring and Logs
+
+All operations provide comprehensive logging:
+- Operations log progress to stdout/stderr
+- Detailed logs written to the `logs/` directory  
+- Container builds logged to `logs/containers/`
+- Database operations logged to `logs/database/`
+- Environment operations include structured status reporting
 
 ## Core Features
 
@@ -54,6 +116,15 @@ Poststack features a powerful CLI that handles PostgreSQL container building, da
 - **Auto-detection**: Automatically detects running PostgreSQL containers and project containers
 - **Custom Naming**: Configure container names per project for isolation
 
+### Environment Management (Recommended Approach)
+- **Multi-Environment Support**: Define dev/staging/production environments in .poststack.yml
+- **Database Isolation**: Automatic PostgreSQL provisioning with per-environment databases
+- **Variable Substitution**: Template-based configuration with ${VAR} syntax for Docker Compose/Podman Pod files
+- **Standard Deployment Files**: Use familiar Docker Compose and Podman Pod formats with variable injection
+- **Init/Deploy Workflow**: Proper initialization (migrations, setup) before application deployment
+- **Dry-Run Debugging**: Preview variable substitutions and validate configurations before deployment
+- **Environment Status**: Comprehensive status reporting for databases and containers per environment
+
 ### Schema Migration System
 - **SQL-based**: Pure SQL migrations with full rollback support
 - **Version Control**: Track applied migrations and schema versions
@@ -63,7 +134,26 @@ Poststack features a powerful CLI that handles PostgreSQL container building, da
 
 ### CLI Commands
 
-#### Container Commands
+#### Environment Management Commands (Recommended)
+```bash
+# Environment lifecycle
+poststack env list                          # Show available environments
+poststack env start <env>                   # Start environment (init + deployment)
+poststack env stop <env>                    # Stop environment
+poststack env restart <env>                 # Restart environment
+poststack env status [env]                  # Show environment status
+
+# Phase-specific operations
+poststack env init <env>                    # Run only init phase
+poststack env deploy <env>                  # Run only deploy phase (assumes init done)
+
+# Debugging and inspection
+poststack env dry-run <env>                 # Preview variable substitutions
+poststack env config <env>                  # Show effective configuration
+poststack env logs <env> [service]          # Show environment logs
+```
+
+#### Container Commands (Legacy)
 ```bash
 # Build container images
 poststack container build [--image postgres|base-debian|all]
@@ -558,6 +648,301 @@ poststack container status
 # Remove containers
 poststack container remove <container_names>
 ```
+
+## Environment Management
+
+Poststack's environment management system provides professional multi-environment deployment workflows with automatic database provisioning and variable substitution. This is the **recommended approach** for new projects.
+
+### Quick Start with Environment Management
+
+1. **Create Environment Configuration** (.poststack.yml):
+   ```yaml
+   project:
+     name: myapp
+     description: "My application with multi-environment deployment"
+
+   environments:
+     dev:
+       postgres:
+         database: myapp_dev
+         port: 5433
+         user: myapp_dev_user
+         password: auto_generated
+       deployment:
+         pod: deploy/app-pod.yaml
+       variables:
+         LOG_LEVEL: debug
+         DEBUG_MODE: "true"
+         APP_PORT: "8080"
+
+     production:
+       postgres:
+         database: myapp_prod
+         port: 5435
+         user: myapp_prod_user
+         password: auto_generated
+       deployment:
+         compose: deploy/app-compose.yml
+       variables:
+         LOG_LEVEL: warn
+         DEBUG_MODE: "false"
+         APP_PORT: "80"
+   ```
+
+2. **Create Deployment Files** with variable substitution:
+   ```yaml
+   # deploy/app-pod.yaml
+   apiVersion: v1
+   kind: Pod
+   metadata:
+     name: myapp-${POSTSTACK_ENVIRONMENT}
+   spec:
+     containers:
+     - name: web
+       image: myapp/web:latest
+       ports:
+       - containerPort: 80
+         hostPort: ${APP_PORT}
+       env:
+       - name: DATABASE_URL
+         value: "${POSTSTACK_DATABASE_URL}"
+       - name: ENVIRONMENT
+         value: "${POSTSTACK_ENVIRONMENT}"
+       - name: LOG_LEVEL
+         value: "${LOG_LEVEL}"
+   ```
+
+3. **Deploy Environments**:
+   ```bash
+   # Preview what will be deployed
+   poststack env dry-run dev
+   
+   # Start development environment
+   poststack env start dev
+   
+   # Check status
+   poststack env status dev
+   
+   # Start production environment  
+   poststack env start production
+   ```
+
+### Environment Configuration (.poststack.yml)
+
+The `.poststack.yml` file defines your project's environments and deployment configuration:
+
+```yaml
+project:
+  name: myapp
+  description: "Application description"
+
+environments:
+  <environment_name>:
+    postgres:
+      database: <database_name>       # Environment-specific database
+      port: <host_port>               # Host port for PostgreSQL
+      user: <username>                # Database user
+      password: auto_generated        # Auto-generate secure password
+      host: localhost                 # Database host
+    
+    init:                             # Optional: Initialization containers
+      - compose: deploy/init.yml      # Run before main deployment
+      - pod: deploy/migrations.yaml   # Init containers must exit cleanly
+    
+    deployment:                       # Main application deployment
+      compose: deploy/app.yml         # Docker Compose file
+      # OR
+      pod: deploy/app.yaml           # Podman Pod file
+    
+    variables:                        # Environment-specific variables
+      LOG_LEVEL: info
+      DEBUG_MODE: "false"
+      CUSTOM_VAR: "value"
+```
+
+### Variable Substitution
+
+Poststack automatically provides these variables to your deployment files:
+
+#### Built-in Variables (Automatically Provided)
+- `${POSTSTACK_DATABASE_URL}` - Complete PostgreSQL connection string
+- `${POSTSTACK_ENVIRONMENT}` - Environment name (dev, staging, production)
+- `${POSTSTACK_DB_HOST}` - Database host
+- `${POSTSTACK_DB_PORT}` - Database port  
+- `${POSTSTACK_DB_NAME}` - Database name
+- `${POSTSTACK_DB_USER}` - Database user
+- `${POSTSTACK_DB_PASSWORD}` - Database password
+
+#### Custom Variables
+Define your own variables in the environment configuration:
+
+```yaml
+environments:
+  dev:
+    variables:
+      LOG_LEVEL: debug
+      APP_PORT: "8080"
+      REDIS_URL: "redis://localhost:6379"
+```
+
+#### Variable Syntax
+```yaml
+# Basic substitution
+value: "${VARIABLE_NAME}"
+
+# With default values
+value: "${VARIABLE_NAME:-default_value}"
+
+# Example usage
+env:
+- name: DATABASE_URL
+  value: "${POSTSTACK_DATABASE_URL}"
+- name: LOG_LEVEL  
+  value: "${LOG_LEVEL:-info}"
+- name: PORT
+  value: "${APP_PORT:-3000}"
+```
+
+### Environment Workflow
+
+#### Development Workflow
+```bash
+# List available environments
+poststack env list
+
+# Preview configuration for development
+poststack env dry-run dev
+
+# Start development environment
+poststack env start dev
+# → Creates postgres database (myapp_dev on port 5433)
+# → Runs init containers (migrations, setup)
+# → Starts application containers with injected variables
+
+# Check what's running
+poststack env status dev
+
+# View logs
+poststack env logs dev
+
+# Stop when done
+poststack env stop dev
+```
+
+#### Production Deployment
+```bash
+# Preview production configuration
+poststack env dry-run production
+
+# Deploy to production
+poststack env start production
+# → Creates postgres database (myapp_prod on port 5435)
+# → Runs production init containers
+# → Deploys with production configuration
+
+# Monitor status
+poststack env status production
+```
+
+### Init Phase
+
+The init phase runs containers that must complete successfully before the main deployment:
+
+```yaml
+environments:
+  dev:
+    init:
+      - compose: deploy/migrations.yml    # Database migrations
+      - pod: deploy/seed-data.yaml       # Seed test data
+    deployment:
+      pod: deploy/app.yaml              # Main application
+```
+
+**Init Phase Rules:**
+- Init containers run sequentially in the order listed
+- Each init container must exit with code 0 (success)
+- If any init container fails, deployment is aborted
+- Logs from failed init containers are displayed for debugging
+
+### Debugging and Troubleshooting
+
+#### Dry-Run Mode
+Preview what variables will be substituted without actually deploying:
+
+```bash
+# Show all variables for an environment
+poststack env dry-run dev
+
+# Show variables used in a specific file
+poststack env dry-run dev --file deploy/app-pod.yaml
+```
+
+#### Status and Logs
+```bash
+# Show status of all environments
+poststack env status
+
+# Show detailed status for one environment
+poststack env status dev
+
+# View logs for environment
+poststack env logs dev
+
+# View logs for specific service
+poststack env logs dev web
+```
+
+#### Common Issues
+
+**Port Conflicts:**
+```bash
+# Error: port already in use
+# Solution: Change port in .poststack.yml or stop conflicting container
+```
+
+**Init Container Failures:**
+```bash
+# Check init container logs
+poststack env logs dev migrations
+
+# Re-run just the init phase
+poststack env init dev
+```
+
+**Variable Substitution Issues:**
+```bash
+# Preview variables before deployment
+poststack env dry-run dev --file deploy/app.yaml
+
+# Check for undefined variables (shows as "UNDEFINED")
+```
+
+### Migration from Container Commands
+
+If you're currently using `poststack container` commands, here's how to migrate:
+
+#### Before (Container Commands)
+```bash
+# Old approach
+poststack container build
+poststack container start --postgres-port 5433
+poststack container start-project --container apache --port 8080
+```
+
+#### After (Environment Management)
+```bash
+# New approach - create .poststack.yml first, then:
+poststack env start dev
+```
+
+### Best Practices
+
+1. **Environment Parity**: Keep environments as similar as possible, varying only necessary configuration
+2. **Version Control**: Commit .poststack.yml and deployment files to version control
+3. **Secrets Management**: Use auto_generated passwords for databases, manage other secrets externally
+4. **Port Management**: Use different ports per environment to avoid conflicts
+5. **Database Naming**: Include environment name in database names for clarity
+6. **Testing**: Use dry-run mode to validate configurations before deployment
 
 ## Migration System
 
