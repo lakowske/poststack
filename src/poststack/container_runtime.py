@@ -499,6 +499,124 @@ class PostgreSQLRunner(ContainerRunner):
             return container['database_url']
         
         return None
+    
+    def list_postgres_containers(self) -> List[Dict[str, str]]:
+        """
+        List all PostgreSQL containers (both running and stopped).
+        
+        Returns:
+            List of dictionaries containing container information
+        """
+        try:
+            # Get both running and stopped containers
+            cmd = [self.container_runtime, "ps", "-a", "--format", "json"]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            
+            if result.returncode != 0:
+                logger.warning(f"Failed to list containers: {result.stderr}")
+                return []
+            
+            import json
+            containers_data = result.stdout.strip()
+            if not containers_data:
+                return []
+            
+            # Parse JSON output
+            try:
+                containers = json.loads(containers_data)
+                if not isinstance(containers, list):
+                    containers = [containers]
+            except json.JSONDecodeError:
+                logger.warning(f"Failed to parse container JSON: {containers_data}")
+                return []
+            
+            postgres_containers = []
+            for container in containers:
+                # Look for poststack PostgreSQL containers
+                names = container.get('Names', [])
+                image = container.get('Image', '')
+                
+                # Check if this looks like a poststack postgres container
+                is_postgres = (
+                    any('postgres' in name.lower() for name in names) or
+                    'postgres' in image.lower()
+                )
+                
+                is_poststack = (
+                    any('poststack' in name.lower() for name in names) or
+                    'poststack' in image.lower()
+                )
+                
+                if is_postgres and (is_poststack or any(self.config.postgres_container_name in name for name in names)):
+                    # Extract basic container info
+                    container_name = names[0] if names else container.get('Id', '')[:12]
+                    status = container.get('State', container.get('Status', 'unknown'))
+                    
+                    # Get port info if running
+                    host_port = None
+                    database = None
+                    if status.lower() in ['running', 'up']:
+                        connection_info = self._extract_postgres_connection_info(container)
+                        if connection_info:
+                            host_port = connection_info.get('port')
+                            database = connection_info.get('database')
+                    
+                    postgres_containers.append({
+                        'name': container_name,
+                        'status': status,
+                        'image': image,
+                        'host_port': host_port,
+                        'database': database
+                    })
+            
+            logger.debug(f"Found {len(postgres_containers)} PostgreSQL containers")
+            return postgres_containers
+            
+        except Exception as e:
+            logger.error(f"Failed to list PostgreSQL containers: {e}")
+            return []
+    
+    def stop_postgres_container(self, container_name: str) -> bool:
+        """
+        Stop a PostgreSQL container by name.
+        
+        Args:
+            container_name: Name of the container to stop
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            logger.info(f"Stopping PostgreSQL container: {container_name}")
+            
+            # First try to stop gracefully
+            cmd = [self.container_runtime, "stop", container_name]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            
+            if result.returncode == 0:
+                logger.info(f"Successfully stopped PostgreSQL container: {container_name}")
+                return True
+            else:
+                logger.warning(f"Failed to stop container {container_name}: {result.stderr}")
+                
+                # Try to force stop if graceful stop failed
+                logger.info(f"Attempting force stop for container: {container_name}")
+                force_cmd = [self.container_runtime, "stop", "-t", "5", container_name]
+                force_result = subprocess.run(force_cmd, capture_output=True, text=True, timeout=10)
+                
+                if force_result.returncode == 0:
+                    logger.info(f"Force stopped PostgreSQL container: {container_name}")
+                    return True
+                else:
+                    logger.error(f"Failed to force stop container {container_name}: {force_result.stderr}")
+                    return False
+                    
+        except subprocess.TimeoutExpired:
+            logger.error(f"Timeout stopping PostgreSQL container: {container_name}")
+            return False
+        except Exception as e:
+            logger.error(f"Error stopping PostgreSQL container {container_name}: {e}")
+            return False
 
 
 

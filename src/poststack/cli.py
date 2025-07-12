@@ -858,6 +858,319 @@ def container_health(ctx: click.Context, container_name: str, postgres_port: int
         sys.exit(1)
 
 
+# Environment management command group
+@cli.group()
+@click.pass_context
+def env(ctx: click.Context) -> None:
+    """Manage multi-environment deployments."""
+    pass
+
+
+@env.command("list")
+@click.pass_context
+def env_list(ctx: click.Context) -> None:
+    """List available environments."""
+    config = ctx.obj["config"]
+    
+    try:
+        from .environment import EnvironmentConfigParser
+        
+        parser = EnvironmentConfigParser(config)
+        environments = parser.list_environments()
+        
+        if not environments:
+            click.echo("No environments configured.")
+            click.echo(f"Create a .poststack.yml file or run 'poststack init' to get started.")
+            return
+        
+        click.echo("Available environments:")
+        for env_name in environments:
+            click.echo(f"  • {env_name}")
+            
+    except Exception as e:
+        click.echo(f"❌ Failed to list environments: {e}", err=True)
+        sys.exit(1)
+
+
+@env.command("start")
+@click.argument("environment")
+@click.option(
+    "--init-only",
+    is_flag=True,
+    help="Run only initialization phase, skip deployment"
+)
+@click.pass_context
+def env_start(ctx: click.Context, environment: str, init_only: bool) -> None:
+    """Start an environment (init + deployment phases)."""
+    config = ctx.obj["config"]
+    
+    try:
+        import asyncio
+        from .environment import EnvironmentOrchestrator
+        
+        orchestrator = EnvironmentOrchestrator(config)
+        
+        click.echo(f"🚀 Starting environment: {environment}")
+        if init_only:
+            click.echo("   (init phase only)")
+        
+        # Run the orchestration
+        result = asyncio.run(orchestrator.start_environment(environment, init_only=init_only))
+        
+        # Display results
+        _display_environment_result(result)
+        
+        if not result.success:
+            sys.exit(1)
+            
+    except Exception as e:
+        click.echo(f"❌ Environment start failed: {e}", err=True)
+        sys.exit(1)
+
+
+@env.command("stop")
+@click.argument("environment")
+@click.option(
+    "--keep-postgres",
+    is_flag=True,
+    help="Keep PostgreSQL database running"
+)
+@click.pass_context
+def env_stop(ctx: click.Context, environment: str, keep_postgres: bool) -> None:
+    """Stop an environment."""
+    config = ctx.obj["config"]
+    
+    try:
+        import asyncio
+        from .environment import EnvironmentOrchestrator
+        
+        orchestrator = EnvironmentOrchestrator(config)
+        
+        click.echo(f"🛑 Stopping environment: {environment}")
+        
+        success = asyncio.run(orchestrator.stop_environment(environment, keep_postgres=keep_postgres))
+        
+        if success:
+            click.echo(f"✅ Environment stopped: {environment}")
+        else:
+            click.echo(f"❌ Failed to stop environment: {environment}")
+            sys.exit(1)
+            
+    except Exception as e:
+        click.echo(f"❌ Environment stop failed: {e}", err=True)
+        sys.exit(1)
+
+
+@env.command("status")
+@click.argument("environment", required=False)
+@click.pass_context
+def env_status(ctx: click.Context, environment: Optional[str]) -> None:
+    """Show environment status."""
+    config = ctx.obj["config"]
+    
+    try:
+        import asyncio
+        from .environment import EnvironmentOrchestrator, EnvironmentConfigParser
+        
+        orchestrator = EnvironmentOrchestrator(config)
+        parser = EnvironmentConfigParser(config)
+        
+        if environment:
+            # Show status for specific environment
+            environments = [environment]
+        else:
+            # Show status for all environments
+            environments = parser.list_environments()
+        
+        if not environments:
+            click.echo("No environments configured.")
+            return
+        
+        for env_name in environments:
+            click.echo(f"\n📊 Environment: {env_name}")
+            click.echo("-" * 40)
+            
+            try:
+                status = asyncio.run(orchestrator.get_environment_status(env_name))
+                
+                if "error" in status:
+                    click.echo(f"❌ Error: {status['error']}")
+                    continue
+                
+                # PostgreSQL status
+                postgres = status.get("postgres", {})
+                postgres_status = postgres.get("status", "unknown")
+                postgres_icon = "✅" if postgres_status == "running" else "❌"
+                click.echo(f"{postgres_icon} PostgreSQL: {postgres_status}")
+                
+                if postgres.get("port"):
+                    click.echo(f"   Port: {postgres['port']}")
+                if postgres.get("database"):
+                    click.echo(f"   Database: {postgres['database']}")
+                
+                # Deployment containers
+                deployment_containers = status.get("deployment_containers", [])
+                if deployment_containers:
+                    click.echo(f"\n🚢 Deployment Containers:")
+                    for container in deployment_containers:
+                        name = container.get("Name", container.get("name", "unknown"))
+                        state = container.get("State", container.get("status", "unknown"))
+                        icon = "✅" if state == "running" else "❌"
+                        click.echo(f"   {icon} {name}: {state}")
+                else:
+                    click.echo(f"🚢 Deployment Containers: none running")
+                    
+            except Exception as e:
+                click.echo(f"❌ Failed to get status for {env_name}: {e}")
+        
+    except Exception as e:
+        click.echo(f"❌ Status check failed: {e}", err=True)
+        sys.exit(1)
+
+
+@env.command("dry-run")
+@click.argument("environment")
+@click.option(
+    "--file",
+    help="Show variables for specific deployment file"
+)
+@click.pass_context
+def env_dry_run(ctx: click.Context, environment: str, file: Optional[str]) -> None:
+    """Preview variable substitutions for an environment."""
+    config = ctx.obj["config"]
+    
+    try:
+        from .environment import EnvironmentConfigParser, VariableSubstitutor
+        from .environment.substitution import PostgresInfo
+        
+        parser = EnvironmentConfigParser(config)
+        env_config = parser.get_environment_config(environment)
+        
+        # Create mock postgres info for dry run
+        postgres_config = env_config.postgres
+        mock_password = "mock_password_for_dry_run"
+        postgres_info = PostgresInfo(postgres_config, mock_password)
+        
+        # Create substitutor
+        substitutor = VariableSubstitutor(environment, env_config, postgres_info)
+        
+        click.echo(f"🔍 Variable substitutions for environment: {environment}")
+        click.echo("=" * 60)
+        
+        # Show all available variables
+        click.echo("\n📋 Available Variables:")
+        variables = substitutor.get_all_variables()
+        
+        for var_name, value in sorted(variables.items()):
+            # Mask sensitive values in dry run
+            if "password" in var_name.lower() or "secret" in var_name.lower():
+                display_value = "***masked***"
+            else:
+                display_value = value
+            click.echo(f"  {var_name} = {display_value}")
+        
+        # If specific file requested, show variables used in that file
+        if file:
+            if not Path(file).exists():
+                click.echo(f"\n❌ File not found: {file}")
+                return
+                
+            click.echo(f"\n🎯 Variables used in {file}:")
+            try:
+                file_variables = substitutor.dry_run(file)
+                
+                if not file_variables:
+                    click.echo("  No variables found in this file")
+                else:
+                    for var_name, value in sorted(file_variables.items()):
+                        if "password" in var_name.lower() or "secret" in var_name.lower():
+                            display_value = "***masked***"
+                        elif value == "(UNDEFINED)":
+                            display_value = "⚠️  UNDEFINED"
+                        elif value.startswith("(default:"):
+                            display_value = f"🔧 {value}"
+                        else:
+                            display_value = value
+                        click.echo(f"  {var_name} = {display_value}")
+                        
+            except Exception as e:
+                click.echo(f"❌ Failed to analyze file {file}: {e}")
+        else:
+            # Show deployment files that would be processed
+            click.echo(f"\n📁 Deployment Files:")
+            
+            # Init files
+            if env_config.init:
+                click.echo("  Init phase:")
+                for i, init_ref in enumerate(env_config.init):
+                    file_path = init_ref.compose or init_ref.pod
+                    click.echo(f"    {i+1}. {file_path}")
+            
+            # Deployment file
+            deployment_file = env_config.deployment.compose or env_config.deployment.pod
+            click.echo(f"  Deployment: {deployment_file}")
+            
+            click.echo(f"\nTip: Use --file <path> to see variables used in a specific file")
+        
+    except Exception as e:
+        click.echo(f"❌ Dry run failed: {e}", err=True)
+        sys.exit(1)
+
+
+def _display_environment_result(result) -> None:
+    """Display formatted environment deployment result."""
+    click.echo(f"\n📊 Environment Results: {result.environment_name}")
+    click.echo("=" * 50)
+    
+    # Overall status
+    overall_icon = "✅" if result.success else "❌"
+    click.echo(f"{overall_icon} Overall Status: {'SUCCESS' if result.success else 'FAILED'}")
+    
+    if result.total_duration:
+        click.echo(f"⏱️  Total Duration: {result.total_duration:.2f}s")
+    
+    # PostgreSQL status
+    postgres_icon = "✅" if result.postgres_started else "❌"
+    click.echo(f"{postgres_icon} PostgreSQL: {'Started' if result.postgres_started else 'Failed to start'}")
+    
+    # Init phase results
+    if result.init_results:
+        click.echo(f"\n🔧 Init Phase Results:")
+        for i, init_result in enumerate(result.init_results):
+            icon = "✅" if init_result.success else "❌"
+            click.echo(f"  {icon} Init {i+1}: exit_code={init_result.exit_code}, duration={init_result.duration:.2f}s")
+            if not init_result.success and init_result.logs:
+                # Show first few lines of error logs
+                error_lines = init_result.logs.strip().split('\n')[-3:]
+                for line in error_lines:
+                    if line.strip():
+                        click.echo(f"      {line}")
+    
+    # Deployment phase result
+    if result.deployment_result:
+        deploy_result = result.deployment_result
+        icon = "✅" if deploy_result.success else "❌"
+        click.echo(f"\n🚢 Deployment Phase:")
+        click.echo(f"  {icon} Deploy: exit_code={deploy_result.exit_code}, duration={deploy_result.duration:.2f}s")
+        if not deploy_result.success and deploy_result.logs:
+            # Show first few lines of error logs
+            error_lines = deploy_result.logs.strip().split('\n')[-3:]
+            for line in error_lines:
+                if line.strip():
+                    click.echo(f"      {line}")
+    
+    # Error message
+    if result.error_message:
+        click.echo(f"\n❌ Error: {result.error_message}")
+        
+        # Provide helpful next steps
+        if not result.success:
+            click.echo(f"\n💡 Next Steps:")
+            click.echo(f"  • Check logs: poststack env logs {result.environment_name}")
+            click.echo(f"  • Retry init: poststack env start {result.environment_name} --init-only")
+            click.echo(f"  • Check config: poststack env dry-run {result.environment_name}")
+
+
 # Log management command group
 @cli.group()
 @click.pass_context

@@ -8,12 +8,70 @@ and command-line arguments using Pydantic settings.
 import os
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, Optional, Union
 
-from pydantic import Field, validator
+from pydantic import BaseModel, Field, validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
+
+
+class DeploymentRef(BaseModel):
+    """Reference to a deployment file (compose or pod)."""
+    compose: Optional[str] = Field(None, description="Path to Docker Compose file")
+    pod: Optional[str] = Field(None, description="Path to Podman Pod YAML file")
+    
+    @validator('compose', 'pod')
+    def validate_deployment_ref(cls, v, values):
+        """Ensure exactly one deployment type is specified."""
+        # This will be called for each field, but we need to check the final state
+        return v
+    
+    def model_post_init(self, __context) -> None:
+        """Validate that exactly one deployment type is specified."""
+        if not (bool(self.compose) ^ bool(self.pod)):
+            raise ValueError("Exactly one of 'compose' or 'pod' must be specified")
+
+
+class PostgresConfig(BaseModel):
+    """PostgreSQL database configuration for an environment."""
+    database: str = Field(..., description="Database name")
+    port: int = Field(5432, description="Host port for database")
+    user: str = Field("poststack", description="Database user")
+    password: str = Field("auto_generated", description="Database password (auto-generated if 'auto_generated')")
+    host: str = Field("localhost", description="Database host")
+    
+    def get_database_url(self, actual_password: str) -> str:
+        """Generate database URL with actual password."""
+        password = actual_password if self.password == "auto_generated" else self.password
+        return f"postgresql://{self.user}:{password}@{self.host}:{self.port}/{self.database}"
+
+
+class EnvironmentConfig(BaseModel):
+    """Configuration for a specific environment (dev, staging, production)."""
+    postgres: PostgresConfig = Field(..., description="PostgreSQL configuration")
+    init: List[DeploymentRef] = Field(default_factory=list, description="Initialization deployments (run first)")
+    deployment: DeploymentRef = Field(..., description="Main application deployment")
+    variables: Dict[str, str] = Field(default_factory=dict, description="Environment-specific variables")
+
+
+class ProjectMeta(BaseModel):
+    """Project metadata."""
+    name: str = Field(..., description="Project name")
+    description: Optional[str] = Field(None, description="Project description")
+
+
+class PoststackProjectConfig(BaseModel):
+    """Project-level configuration for environment management."""
+    project: ProjectMeta = Field(..., description="Project metadata")
+    environments: Dict[str, EnvironmentConfig] = Field(..., description="Environment configurations")
+    
+    @validator('environments')
+    def validate_environments(cls, v):
+        """Ensure at least one environment is defined."""
+        if not v:
+            raise ValueError("At least one environment must be defined")
+        return v
 
 
 class PoststackConfig(BaseSettings):
@@ -96,6 +154,12 @@ class PoststackConfig(BaseSettings):
     migrations_path: str = Field(
         default="./migrations",
         description="Path to database migration files",
+    )
+
+    # Environment configuration
+    project_config_file: str = Field(
+        default=".poststack.yml",
+        description="Path to project configuration file",
     )
 
     # Development configuration
@@ -236,6 +300,33 @@ class PoststackConfig(BaseSettings):
             )
 
         return config_dict
+    
+    def load_project_config(self) -> Optional[PoststackProjectConfig]:
+        """Load project configuration from .poststack.yml file."""
+        config_path = Path(self.project_config_file)
+        
+        if not config_path.exists():
+            logger.debug(f"Project config file not found: {config_path}")
+            return None
+        
+        try:
+            import yaml
+            with open(config_path, 'r') as f:
+                config_data = yaml.safe_load(f)
+            
+            if not config_data:
+                logger.warning(f"Empty project config file: {config_path}")
+                return None
+            
+            return PoststackProjectConfig(**config_data)
+            
+        except Exception as e:
+            logger.error(f"Failed to load project config from {config_path}: {e}")
+            raise ValueError(f"Invalid project configuration: {e}")
+    
+    def has_project_config(self) -> bool:
+        """Check if a project configuration file exists."""
+        return Path(self.project_config_file).exists()
 
     @classmethod
     def from_cli_args(
