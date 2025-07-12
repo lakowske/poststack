@@ -256,7 +256,13 @@ class PoststackConfig(BaseSettings):
     def get_auto_detected_database_url(self) -> Optional[str]:
         """Auto-detect database URL from running PostgreSQL containers."""
         try:
-            # Import here to avoid circular imports
+            # First try deployment-based auto-detection (new multi-service architecture)
+            deployment_url = self._get_deployment_postgres_url()
+            if deployment_url:
+                logger.info(f"Auto-detected PostgreSQL from deployment: {deployment_url.split('@')[1] if '@' in deployment_url else deployment_url}")
+                return deployment_url
+            
+            # Fallback to legacy container auto-detection
             from .container_runtime import PostgreSQLRunner
             
             postgres_runner = PostgreSQLRunner(self)
@@ -271,6 +277,76 @@ class PoststackConfig(BaseSettings):
                 
         except Exception as e:
             logger.debug(f"Failed to auto-detect database URL: {e}")
+            return None
+
+    def _get_deployment_postgres_url(self) -> Optional[str]:
+        """Get PostgreSQL URL from deployment configuration."""
+        try:
+            # Import here to avoid circular imports
+            from .environment.config import EnvironmentConfigParser
+            
+            # Get current environment name
+            env_name = os.getenv('POSTSTACK_ENVIRONMENT', 'dev')
+            
+            parser = EnvironmentConfigParser(self)
+            env_config = parser.get_environment_config(env_name)
+            project_config = parser.load_project_config()
+            
+            # Find PostgreSQL deployment
+            postgres_deployment = None
+            for deployment in env_config.deployments:
+                if deployment.enabled and deployment.get_deployment_name() == 'postgres':
+                    postgres_deployment = deployment
+                    break
+            
+            if not postgres_deployment:
+                logger.debug("No enabled PostgreSQL deployment found")
+                return None
+            
+            # Extract connection details from deployment variables
+            variables = postgres_deployment.variables
+            db_host = variables.get('DB_HOST', 'localhost')
+            db_port = variables.get('DB_PORT', '5432')
+            db_name = variables.get('DB_NAME', 'postgres')
+            db_user = variables.get('DB_USER', 'postgres') 
+            db_password = variables.get('DB_PASSWORD', '')
+            
+            # Check if container is actually running by looking for the expected container name
+            expected_container_name = f"{project_config.project.name}-postgres-{env_name}-postgres"
+            
+            import subprocess
+            try:
+                cmd = ["podman", "ps", "--format", "json"]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                
+                if result.returncode == 0:
+                    import json
+                    containers = json.loads(result.stdout.strip()) if result.stdout.strip() else []
+                    
+                    container_running = any(
+                        expected_container_name in container.get('Names', [])
+                        for container in containers
+                    )
+                    
+                    if not container_running:
+                        logger.debug(f"PostgreSQL container {expected_container_name} not running")
+                        return None
+                        
+            except Exception as e:
+                logger.debug(f"Failed to check container status: {e}")
+                return None
+            
+            # Build database URL
+            if db_password:
+                database_url = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+            else:
+                database_url = f"postgresql://{db_user}@{db_host}:{db_port}/{db_name}"
+                
+            logger.debug(f"Built PostgreSQL URL from deployment config: postgresql://{db_user}:***@{db_host}:{db_port}/{db_name}")
+            return database_url
+            
+        except Exception as e:
+            logger.debug(f"Failed to get deployment PostgreSQL URL: {e}")
             return None
     
     @property

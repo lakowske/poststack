@@ -637,6 +637,67 @@ def verify_migrations(ctx: click.Context) -> None:
 
 @database.command()
 @click.option(
+    "--command",
+    "-c",
+    help="Execute a single command and exit",
+)
+@click.pass_context
+def shell(ctx: click.Context, command: Optional[str]) -> None:
+    """Open a PostgreSQL shell (psql) to the auto-detected database."""
+    config: PoststackConfig = ctx.obj["config"]
+
+    if not config.is_database_configured:
+        click.echo("❌ Database not configured or auto-detection failed.", err=True)
+        click.echo("Make sure PostgreSQL is running in your current environment.", err=True)
+        sys.exit(1)
+
+    try:
+        import subprocess
+        import urllib.parse
+
+        # Get database URL (auto-detected or configured)
+        effective_url = config.effective_database_url
+        parsed = urllib.parse.urlparse(effective_url)
+
+        # Build psql command
+        cmd = [
+            "psql",
+            f"--host={parsed.hostname}",
+            f"--port={parsed.port or 5432}",
+            f"--username={parsed.username}",
+            f"--dbname={parsed.path[1:]}",  # Remove leading slash
+        ]
+
+        if command:
+            cmd.extend(["-c", command])
+
+        # Set password environment variable
+        env = {"PGPASSWORD": parsed.password} if parsed.password else {}
+
+        # Show connection info (masked)
+        import re
+        masked_url = re.sub(r"://([^:]+):([^@]+)@", r"://\1:***@", effective_url)
+        click.echo(f"Connecting to: {masked_url}")
+
+        if command:
+            # Execute single command
+            result = subprocess.run(cmd, env=env)
+            sys.exit(result.returncode)
+        else:
+            # Interactive shell
+            click.echo("Opening PostgreSQL shell (type \\q to exit)")
+            subprocess.run(cmd, env=env)
+
+    except FileNotFoundError:
+        click.echo("❌ psql not found. Install PostgreSQL client tools.", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"❌ Failed to open database shell: {e}", err=True)
+        sys.exit(1)
+
+
+@database.command()
+@click.option(
     "--confirm",
     is_flag=True,
     help="Skip confirmation prompt",
