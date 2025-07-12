@@ -6,7 +6,6 @@ container image building and runtime operations with comprehensive
 error handling and logging integration.
 """
 
-import asyncio
 import logging
 import subprocess
 import time
@@ -203,60 +202,6 @@ class ContainerBuilder:
             logger.error(f"Build exception for {image_name}: {e}")
             return result
 
-    def build_images_parallel(
-        self,
-        build_specs: List[Dict[str, Union[str, Path, Dict, List, bool, int]]],
-        max_concurrent: int = 3,
-    ) -> List[BuildResult]:
-        """
-        Build multiple images in parallel.
-
-        Args:
-            build_specs: List of build specifications (same args as build_image)
-            max_concurrent: Maximum number of concurrent builds
-
-        Returns:
-            List of BuildResult objects
-        """
-        logger.info(
-            f"Building {len(build_specs)} images with max {max_concurrent} concurrent builds"
-        )
-
-        async def build_async(spec: Dict) -> BuildResult:
-            """Async wrapper for build_image."""
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(None, lambda: self.build_image(**spec))
-
-        async def build_all() -> List[BuildResult]:
-            """Build all images with concurrency limit."""
-            semaphore = asyncio.Semaphore(max_concurrent)
-
-            async def build_with_semaphore(spec: Dict) -> BuildResult:
-                async with semaphore:
-                    return await build_async(spec)
-
-            tasks = [build_with_semaphore(spec) for spec in build_specs]
-            return await asyncio.gather(*tasks)
-
-        # Run the async build process
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        results = loop.run_until_complete(build_all())
-
-        # Log summary
-        successful = sum(1 for r in results if r.success)
-        failed = len(results) - successful
-        total_time = sum(r.build_time for r in results)
-
-        logger.info(
-            f"Parallel build complete: {successful} successful, {failed} failed, {total_time:.1f}s total"
-        )
-
-        return results
 
     def image_exists(self, image_name: str) -> bool:
         """Check if an image exists locally."""
