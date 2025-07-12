@@ -32,6 +32,7 @@ class RealContainerBuilder(ContainerBuilder):
         super().__init__(config, log_handler)
         self.base_images_built = set()
         self.build_cache = {}
+        self.poststack_root = Path(__file__).parent.parent.parent
         
     def build_base_image(self) -> BuildResult:
         """
@@ -41,16 +42,15 @@ class RealContainerBuilder(ContainerBuilder):
             BuildResult with build status and details
         """
         image_name = "poststack/base-debian:latest"
-        dockerfile_path = Path("containers/base-debian/Dockerfile")
+        dockerfile_path = self.poststack_root / "containers" / "base-debian" / "Dockerfile"
         
         logger.info("Building base image: %s", image_name)
         
         result = self.build_image(
             image_name=image_name,
             dockerfile_path=dockerfile_path,
-            context_path=Path("."),  # Use project root as context
+            context_path=self.poststack_root,  # Use poststack root as context
             tags=["poststack/base-debian:latest", "poststack/base-debian:1.0.0"],
-            no_cache=False,  # Use cache for base image
             timeout=900,  # Longer timeout for base image
         )
         
@@ -77,19 +77,26 @@ class RealContainerBuilder(ContainerBuilder):
                 return base_result
         
         image_name = "poststack/postgres:latest"
-        dockerfile_path = Path("containers/postgres/Dockerfile")
         
-        logger.info("Building PostgreSQL image: %s", image_name)
+        # Check if user has PostgreSQL files, otherwise use poststack's
+        user_dockerfile = Path("containers/postgres/Dockerfile")
+        if user_dockerfile.exists():
+            dockerfile_path = user_dockerfile
+            context_path = Path(".")  # Use project root as context
+            logger.info("Building PostgreSQL image from user files: %s", image_name)
+        else:
+            dockerfile_path = self.poststack_root / "containers" / "postgres" / "Dockerfile"
+            context_path = self.poststack_root  # Use poststack root as context
+            logger.info("Building PostgreSQL image from poststack files: %s", image_name)
         
         result = self.build_image(
             image_name=image_name,
             dockerfile_path=dockerfile_path,
-            context_path=Path("."),  # Use project root as context
+            context_path=context_path,
             tags=["poststack/postgres:latest", "poststack/postgres:15"],
             build_args={
                 "POSTGRES_VERSION": "15",
             },
-            no_cache=False,
             timeout=600,
         )
         
@@ -168,7 +175,6 @@ class RealContainerBuilder(ContainerBuilder):
         first_result = self.build_image(
             image_name=f"{image_name}:cache-test-1",
             dockerfile_path=dockerfile_path,
-            no_cache=True,
         )
         
         if not first_result.success:
@@ -183,7 +189,6 @@ class RealContainerBuilder(ContainerBuilder):
         second_result = self.build_image(
             image_name=f"{image_name}:cache-test-2",
             dockerfile_path=dockerfile_path,
-            no_cache=False,
         )
         
         if not second_result.success:

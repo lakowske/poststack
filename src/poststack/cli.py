@@ -108,17 +108,17 @@ def build(ctx: click.Context, no_cache: bool) -> None:
         
         # Step 1: Build base image
         click.echo("\n📦 Building base-debian image...")
-        base_result = builder.build_base_image(no_cache=no_cache)
+        base_result = builder.build_base_image()
         if not base_result.success:
-            click.echo(f"❌ Failed to build base-debian: {base_result.logs}")
+            click.echo(f"❌ Failed to build base-debian: {base_result.stderr}")
             sys.exit(1)
         click.echo(f"✅ base-debian built ({base_result.build_time:.1f}s)")
         
         # Step 2: Build postgres image
         click.echo("\n📦 Building postgres image...")
-        postgres_result = builder.build_postgres_image(no_cache=no_cache)
+        postgres_result = builder.build_postgres_image()
         if not postgres_result.success:
-            click.echo(f"❌ Failed to build postgres: {postgres_result.logs}")
+            click.echo(f"❌ Failed to build postgres: {postgres_result.stderr}")
             sys.exit(1)
         click.echo(f"✅ postgres built ({postgres_result.build_time:.1f}s)")
         
@@ -140,10 +140,10 @@ def build(ctx: click.Context, no_cache: bool) -> None:
                     image_tag=container_info["image"],
                     no_cache=no_cache
                 )
-                if result.status == BuildStatus.SUCCESS:
+                if result.success:
                     click.echo(f"✅ {name} built ({result.build_time:.1f}s)")
                 else:
-                    click.echo(f"❌ {name} failed: {result.logs}")
+                    click.echo(f"❌ {name} failed: {result.stderr}")
                     sys.exit(1)
         else:
             click.echo("No project containers found")
