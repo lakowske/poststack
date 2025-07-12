@@ -6,8 +6,6 @@ visible and customizable in user projects.
 """
 
 import logging
-import shutil
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional

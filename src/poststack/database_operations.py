@@ -10,7 +10,7 @@ import logging
 import re
 import socket
 import time
-from typing import Dict, Optional, Tuple, Any
+from typing import Dict, Optional, Any
 from urllib.parse import urlparse
 
 from .config import PoststackConfig

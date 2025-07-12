@@ -10,7 +10,7 @@ import logging
 import subprocess
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional
 
 from .config import PoststackConfig
 from .logging_config import SubprocessLogHandler
@@ -403,45 +403,6 @@ class ContainerRunner:
             logger.error(f"Stop exception for {container_name}: {e}")
             return result
 
-    def remove_container(self, container_name: str, force: bool = False) -> RuntimeResult:
-        """Remove a container."""
-        result = RuntimeResult(
-            container_name=container_name,
-            image_name="",
-            status=RuntimeStatus.STARTING
-        )
-        
-        try:
-            logger.info(f"Removing container: {container_name}")
-            
-            cmd = [self.container_runtime, "rm"]
-            if force:
-                cmd.append("--force")
-            cmd.append(container_name)
-
-            process = subprocess.run(
-                cmd, 
-                capture_output=True, 
-                text=True, 
-                timeout=30
-            )
-
-            if process.returncode == 0:
-                result.status = RuntimeStatus.STOPPED
-                result.message = f"Container {container_name} removed successfully"
-                logger.info(f"Container {container_name} removed successfully")
-            else:
-                result.status = RuntimeStatus.FAILED
-                result.message = f"Failed to remove {container_name}: {process.stderr}"
-                logger.error(f"Failed to remove {container_name}: {process.stderr}")
-
-            return result
-
-        except Exception as e:
-            result.status = RuntimeStatus.FAILED
-            result.message = f"Remove exception for {container_name}: {e}"
-            logger.error(f"Remove exception for {container_name}: {e}")
-            return result
 
     def get_container_status(self, container_name: str) -> Optional[RuntimeResult]:
         """Get status of a container."""

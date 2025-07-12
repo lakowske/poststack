@@ -13,10 +13,8 @@ import click
 from .config import PoststackConfig, load_config
 from .database import database
 from .logging_config import setup_logging
-from .models import BuildStatus
 from .project_containers import discover_project_containers
 from .real_container_builder import RealContainerBuilder
-from .container_runtime import ContainerLifecycleManager
 from .environment.config import EnvironmentConfigParser
 from .environment.orchestrator import EnvironmentOrchestrator
 
@@ -454,8 +452,6 @@ cli.add_command(database, name="db")
 
 # Add missing import
 import asyncio
-import shutil
-import os
 from .init import InitCommand
 
 
