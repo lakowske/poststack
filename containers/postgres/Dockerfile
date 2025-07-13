@@ -1,6 +1,6 @@
 # PostgreSQL container for Poststack
 # Based on base-debian with PostgreSQL server and client tools
-FROM poststack/base-debian:latest
+FROM localhost/poststack/base-debian:latest
 
 # Metadata
 LABEL maintainer="Poststack Contributors"

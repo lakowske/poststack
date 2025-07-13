@@ -305,10 +305,10 @@ class InitCommand:
 apiVersion: v1
 kind: Pod
 metadata:
-  name: postgres-${POSTSTACK_ENVIRONMENT}
+  name: postgres-${ENVIRONMENT}
   labels:
     app: postgres
-    environment: ${POSTSTACK_ENVIRONMENT}
+    environment: ${ENVIRONMENT}
     managed-by: poststack
     component: database
 spec:
@@ -338,16 +338,16 @@ spec:
     image: localhost/poststack/postgres:latest
     ports:
     - containerPort: 5432
-      hostPort: ${POSTSTACK_DB_PORT}
+      hostPort: ${DB_PORT}
       protocol: TCP
     env:
     # Database configuration from poststack environment
     - name: POSTGRES_DB
-      value: "${POSTSTACK_DB_NAME}"
+      value: "${DB_NAME}"
     - name: POSTGRES_USER
-      value: "${POSTSTACK_DB_USER}"
+      value: "${DB_USER}"
     - name: POSTGRES_PASSWORD
-      value: "${POSTSTACK_DB_PASSWORD}"
+      value: "${DB_PASSWORD}"
     - name: POSTGRES_HOST_AUTH_METHOD
       value: "trust"
     
@@ -359,7 +359,7 @@ spec:
     
     # Poststack environment info
     - name: POSTSTACK_ENVIRONMENT
-      value: "${POSTSTACK_ENVIRONMENT}"
+      value: "${ENVIRONMENT}"
     - name: POSTSTACK_CONFIG_DIR
       value: "/data/config"
     - name: POSTSTACK_CERT_PATH
@@ -422,18 +422,18 @@ spec:
   #- name: postgres-data
   #  # Persistent volume - data survives pod restarts and environment stops
   #  persistentVolumeClaim:
-  #    claimName: postgres-data-${POSTSTACK_ENVIRONMENT}
+  #    claimName: postgres-data-${ENVIRONMENT}
   #- name: postgres-logs
   #  # Named volume for log persistence
   #  hostPath:
-  #    path: /var/lib/poststack/logs/${POSTSTACK_ENVIRONMENT}
+  #    path: /var/lib/poststack/logs/${ENVIRONMENT}
   #    type: DirectoryOrCreate
 
   # Example 3: Host path volumes (uncomment and configure as needed)
   #- name: postgres-data
   #  # Direct host path mount - useful for development
   #  hostPath:
-  #    path: /var/lib/poststack/postgres/${POSTSTACK_ENVIRONMENT}/data
+  #    path: /var/lib/poststack/postgres/${ENVIRONMENT}/data
   #    type: DirectoryOrCreate
   
   restartPolicy: Always
@@ -496,7 +496,7 @@ spec:
 # Configuration Notes:
 # 
 # 1. Environment Variables:
-#    Variables like ${POSTSTACK_DB_NAME} are substituted by poststack
+#    Variables like ${DB_NAME} are substituted by poststack
 #    at deployment time based on your .poststack.yml configuration.
 #
 # 2. Volumes:
@@ -586,10 +586,10 @@ modify health check settings.
 The following environment variables are available for configuration:
 
 ### Database Settings
-- `POSTSTACK_DB_NAME` - Database name
-- `POSTSTACK_DB_USER` - Database user
-- `POSTSTACK_DB_PASSWORD` - Database password  
-- `POSTSTACK_DB_PORT` - Database port
+- `DB_NAME` - Database name
+- `DB_USER` - Database user
+- `DB_PASSWORD` - Database password  
+- `DB_PORT` - Database port
 
 ### PostgreSQL Specific
 - `PGDATA` - PostgreSQL data directory
@@ -597,7 +597,7 @@ The following environment variables are available for configuration:
 - `POSTGRES_HOST_AUTH_METHOD` - Default authentication method
 
 ### Poststack Environment
-- `POSTSTACK_ENVIRONMENT` - Current environment (dev/staging/prod)
+- `ENVIRONMENT` - Current environment (dev/staging/prod)
 - `POSTSTACK_CONFIG_DIR` - Configuration directory
 - `POSTSTACK_CERT_PATH` - SSL certificate path
 - `POSTSTACK_LOG_DIR` - Log directory
