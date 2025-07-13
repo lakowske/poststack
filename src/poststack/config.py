@@ -48,6 +48,7 @@ class DeploymentRef(BaseModel):
     
     # Per-deployment configuration
     name: Optional[str] = Field(None, description="Custom name for this deployment")
+    type: Optional[str] = Field(None, description="Service type for enhanced operator functionality (postgres, redis, etc.)")
     depends_on: List[str] = Field(default_factory=list, description="Dependencies on other deployments")
     variables: Dict[str, str] = Field(default_factory=dict, description="Deployment-specific variables")
     volumes: Dict[str, VolumeConfig] = Field(default_factory=dict, description="Deployment-specific volumes")
@@ -292,10 +293,10 @@ class PoststackConfig(BaseSettings):
             env_config = parser.get_environment_config(env_name)
             project_config = parser.load_project_config()
             
-            # Find PostgreSQL deployment
+            # Find PostgreSQL deployment by type
             postgres_deployment = None
             for deployment in env_config.deployments:
-                if deployment.enabled and deployment.get_deployment_name() == 'postgres':
+                if deployment.enabled and deployment.type == 'postgres':
                     postgres_deployment = deployment
                     break
             

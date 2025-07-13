@@ -76,6 +76,11 @@ class EnvironmentOrchestrator:
             env_config = self.config_parser.get_environment_config(env_name)
             project_config = self.config_parser.load_project_config()
             
+            # Create dedicated network for environment
+            network_success = await self._ensure_network_exists(env_name, project_config.project.name)
+            if not network_success:
+                raise RuntimeError(f"Failed to create network for environment: {env_name}")
+            
             # Ensure all required volumes exist
             volume_success = await self._ensure_volumes_exist(env_name, env_config, project_config.project.name)
             if not volume_success:
@@ -225,20 +230,31 @@ class EnvironmentOrchestrator:
     
     async def _get_postgres_status(self, env_name: str, env_config: EnvironmentConfig, project_config) -> Dict:
         """Get PostgreSQL container status for the environment."""
-        # Generate PostgreSQL container name pattern: {project}-postgres-{environment}
-        postgres_container_name = f"{project_config.project.name}-postgres-{env_name}"
+        # Find PostgreSQL deployment by type
+        postgres_deployment = None
+        for deployment in env_config.deployments:
+            if deployment.enabled and deployment.type == "postgres":
+                postgres_deployment = deployment
+                break
+        
+        if not postgres_deployment:
+            return {
+                "running": False,
+                "status": "no postgres deployment",
+                "port": None
+            }
+        
+        # Generate PostgreSQL container name pattern: {project}-{deployment_name}-{environment}-postgres
+        deployment_name = postgres_deployment.get_deployment_name()
+        postgres_container_name = f"{project_config.project.name}-{deployment_name}-{env_name}-postgres"
         
         try:
             # Use the postgres runner to get container status
             postgres_result = self.postgres_runner.get_container_status(postgres_container_name)
             
             if postgres_result and postgres_result.status == RuntimeStatus.RUNNING:
-                # Get PostgreSQL port from environment config
-                postgres_port = "5432"  # default
-                for deployment in env_config.deployments:
-                    if deployment.get_deployment_name() == "postgres":
-                        postgres_port = deployment.variables.get("DB_PORT", "5432")
-                        break
+                # Get PostgreSQL port from deployment config
+                postgres_port = postgres_deployment.variables.get("DB_PORT", "5432")
                 
                 return {
                     "running": True,
@@ -359,7 +375,8 @@ class EnvironmentOrchestrator:
                 if deployment.compose:
                     result = await self._run_compose_deployment(deployment.compose, deployment_substitutor)
                 elif deployment.pod:
-                    result = await self._run_pod_deployment(deployment.pod, deployment_substitutor)
+                    network_name = f"{deployment_substitutor.project_name}-{deployment_substitutor.environment_name}"
+                    result = await self._run_pod_deployment(deployment.pod, deployment_substitutor, network_name)
                 else:
                     result = PhaseResult(
                         success=False,
@@ -561,8 +578,8 @@ class EnvironmentOrchestrator:
             # Keep temp file for running deployment (don't cleanup immediately)
             pass
     
-    async def _run_pod_deployment(self, pod_file: str, substitutor: VariableSubstitutor) -> PhaseResult:
-        """Run Podman Pod deployment."""
+    async def _run_pod_deployment(self, pod_file: str, substitutor: VariableSubstitutor, network_name: Optional[str] = None) -> PhaseResult:
+        """Run Podman Pod deployment with optional network."""
         start_time = asyncio.get_event_loop().time()
         temp_file = None
         
@@ -570,8 +587,10 @@ class EnvironmentOrchestrator:
             # Process template file
             temp_file = create_temp_processed_file(pod_file, substitutor, ".deploy.processed")
             
-            # Run podman play kube
+            # Run podman play kube with network if specified
             cmd = ["podman", "play", "kube", temp_file]
+            if network_name:
+                cmd.extend(["--network", network_name])
             
             logger.info(f"Running deployment pod: {' '.join(cmd)}")
             
@@ -595,7 +614,7 @@ class EnvironmentOrchestrator:
                 duration=duration,
                 logs=logs,
                 command=' '.join(cmd),
-                file_path=pod_file
+                file_path=temp_file or pod_file
             )
             
         except Exception as e:
@@ -752,10 +771,12 @@ class EnvironmentOrchestrator:
             return []
     
     async def _get_pod_status(self, pod_file: str) -> List[Dict]:
-        """Get status of Podman Pod containers."""
+        """Get status of Podman Pod containers for a specific pod file."""
         try:
-            # This is a simplified implementation - podman doesn't have direct equivalent to docker-compose ps
-            # In a real implementation, you'd parse the pod file and check each container
+            # For pod-based deployments, we'll derive the expected pod name from the deployment context
+            # and then filter containers that belong to pods with that name pattern
+            
+            # Get all containers
             cmd = ["podman", "ps", "--format", "json"]
             
             process = await asyncio.create_subprocess_exec(
@@ -770,24 +791,35 @@ class EnvironmentOrchestrator:
                 import json
                 containers = json.loads(stdout.decode('utf-8'))
                 
-                # Convert to expected format
+                # Extract deployment name from pod file path to match against container names
+                # e.g., "deploy/postgres-pod.yaml.deploy.processed" -> "postgres"
+                from pathlib import Path
+                pod_file_name = Path(pod_file).name
+                # Extract deployment type from filename (postgres-pod.yaml -> postgres)
+                deployment_type = pod_file_name.split('-')[0]  # "postgres" from "postgres-pod.yaml.deploy.processed"
+                
+                # Convert to expected format, filtering for containers that match our deployment
                 formatted_containers = []
                 for container in containers:
                     # Skip infra containers
                     if container.get("IsInfra", False):
                         continue
                         
-                    state = container.get("State", "unknown").lower()
                     names = container.get("Names", [])
                     name = names[0] if names else "unknown"
                     
-                    formatted_containers.append({
-                        "name": name,
-                        "status": container.get("Status", "unknown"),
-                        "running": state == "running",
-                        "image": container.get("Image", ""),
-                        "state": state
-                    })
+                    # Only include containers whose names contain our deployment type
+                    # e.g., "unified-postgres-dev-postgres" contains "postgres"
+                    if deployment_type in name:
+                        state = container.get("State", "unknown").lower()
+                        
+                        formatted_containers.append({
+                            "name": name,
+                            "status": container.get("Status", "unknown"),
+                            "running": state == "running",
+                            "image": container.get("Image", ""),
+                            "state": state
+                        })
                 
                 return formatted_containers
             else:
@@ -796,6 +828,63 @@ class EnvironmentOrchestrator:
         except Exception as e:
             logger.error(f"Failed to get pod status for {pod_file}: {e}")
             return []
+    
+    async def _ensure_network_exists(self, env_name: str, project_name: str) -> bool:
+        """Ensure environment-specific network exists for proper DNS resolution."""
+        network_name = f"{project_name}-{env_name}"
+        
+        try:
+            # Check if network already exists
+            if await self._network_exists(network_name):
+                logger.debug(f"Network already exists: {network_name}")
+                return True
+            
+            # Create the network
+            logger.info(f"Creating network: {network_name}")
+            cmd = ["podman", "network", "create", network_name]
+            
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode == 0:
+                logger.info(f"Successfully created network: {network_name}")
+                return True
+            else:
+                logger.error(f"Failed to create network {network_name}: {stderr.decode().strip()}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Exception while creating network {network_name}: {e}")
+            return False
+    
+    async def _network_exists(self, network_name: str) -> bool:
+        """Check if a network exists."""
+        try:
+            cmd = ["podman", "network", "ls", "--format", "{{.Name}}"]
+            
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode == 0:
+                networks = stdout.decode().strip().split('\n')
+                return network_name in networks
+            else:
+                logger.warning(f"Failed to list networks: {stderr.decode().strip()}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Exception while checking network {network_name}: {e}")
+            return False
     
     async def _ensure_volumes_exist(self, env_name: str, env_config: EnvironmentConfig, project_name: str) -> bool:
         """Ensure all required named volumes exist before deployment."""

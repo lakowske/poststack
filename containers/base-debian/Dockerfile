@@ -31,6 +31,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     strace \
     vim-tiny \
     less \
+    iputils-ping \
+    # PostgreSQL client (without server)
+    postgresql-client \
     # Certificate and crypto tools
     openssl \
     # JSON processing

@@ -142,7 +142,8 @@ def build(ctx: click.Context, no_cache: bool) -> None:
                 if result.success:
                     click.echo(f"✅ {name} built ({result.build_time:.1f}s)")
                 else:
-                    click.echo(f"❌ {name} failed: {result.stderr}")
+                    error_msg = result.stderr or "Unknown error"
+                    click.echo(f"❌ {name} failed: {error_msg}")
                     sys.exit(1)
         else:
             click.echo("No project containers found")
@@ -218,11 +219,11 @@ def env_start(ctx: click.Context, environment: Optional[str]) -> None:
         
         if result.success:
             click.echo(f"✅ Environment '{environment}' started successfully")
-            click.echo(f"   PostgreSQL: {result.postgres_started}")
             if result.init_results:
                 click.echo(f"   Init containers: {len([r for r in result.init_results if r.success])}/{len(result.init_results)} succeeded")
-            if result.deployment_result:
-                click.echo(f"   Deployment: {'succeeded' if result.deployment_result.success else 'failed'}")
+            if result.deployment_results:
+                successful_deployments = len([r for r in result.deployment_results if r.success])
+                click.echo(f"   Deployments: {successful_deployments}/{len(result.deployment_results)} succeeded")
         else:
             click.echo(f"❌ Failed to start environment: {result.error_message}")
             sys.exit(1)
@@ -450,6 +451,197 @@ def env_switch(ctx: click.Context, environment: str) -> None:
 # Database operations (rename from 'database' to 'db')
 cli.add_command(database, name="db")
 cli.add_command(volumes, name="volumes")
+
+
+# Service operations command group
+@cli.group()
+@click.pass_context
+def service(ctx: click.Context) -> None:
+    """Manage services and perform service-specific operations."""
+    pass
+
+
+@service.command("create-user")
+@click.option("--username", required=True, help="Username for the new user")
+@click.option("--password", required=True, help="Password for the new user")
+@click.option("--email", help="Email address for the new user")
+@click.option("--role", type=click.Choice(["user", "admin"]), default="user", help="User role")
+@click.option("--environment", help="Environment to target (defaults to current)")
+@click.pass_context
+def service_create_user(ctx: click.Context, username: str, password: str, email: Optional[str], role: str, environment: Optional[str]) -> None:
+    """Create a new user via web service API."""
+    config = ctx.obj["config"]
+    
+    try:
+        from .service_operations import ServiceOperations
+        
+        parser = EnvironmentConfigParser(config)
+        project_config = parser.load_project_config()
+        
+        # Use current environment if not specified
+        if not environment:
+            environment = project_config.environment
+            click.echo(f"Using current environment: {environment}")
+        
+        if environment not in project_config.environments:
+            click.echo(f"❌ Environment '{environment}' not found")
+            sys.exit(1)
+        
+        click.echo(f"🚀 Creating user '{username}' in environment '{environment}'...")
+        
+        service_ops = ServiceOperations(config)
+        result = asyncio.run(service_ops.create_user(
+            environment=environment,
+            username=username,
+            password=password,
+            email=email,
+            role=role
+        ))
+        
+        if result['success']:
+            user = result['user']
+            click.echo(f"✅ User created successfully:")
+            click.echo(f"   ID: {user['id']}")
+            click.echo(f"   Username: {user['username']}")
+            click.echo(f"   Email: {user['email']}")
+            click.echo(f"   Role: {user['role']}")
+            click.echo(f"   Active: {user['active']}")
+            click.echo(f"   Created: {user['created_at']}")
+        else:
+            click.echo(f"❌ Failed to create user: {result.get('error', 'Unknown error')}")
+            if 'details' in result:
+                for detail in result['details']:
+                    click.echo(f"   - {detail}")
+            sys.exit(1)
+            
+    except Exception as e:
+        click.echo(f"❌ Failed to create user: {e}", err=True)
+        sys.exit(1)
+
+
+@service.command("list-users")
+@click.option("--limit", type=int, default=50, help="Maximum number of users to return")
+@click.option("--offset", type=int, default=0, help="Number of users to skip")
+@click.option("--role", type=click.Choice(["user", "admin"]), help="Filter by user role")
+@click.option("--active/--inactive", default=None, help="Filter by active status")
+@click.option("--search", help="Search in username and email")
+@click.option("--environment", help="Environment to target (defaults to current)")
+@click.pass_context
+def service_list_users(ctx: click.Context, limit: int, offset: int, role: Optional[str], active: Optional[bool], search: Optional[str], environment: Optional[str]) -> None:
+    """List users via web service API."""
+    config = ctx.obj["config"]
+    
+    try:
+        from .service_operations import ServiceOperations
+        
+        parser = EnvironmentConfigParser(config)
+        project_config = parser.load_project_config()
+        
+        # Use current environment if not specified
+        if not environment:
+            environment = project_config.environment
+            click.echo(f"Using current environment: {environment}")
+        
+        if environment not in project_config.environments:
+            click.echo(f"❌ Environment '{environment}' not found")
+            sys.exit(1)
+        
+        click.echo(f"📋 Listing users in environment '{environment}'...")
+        
+        service_ops = ServiceOperations(config)
+        result = asyncio.run(service_ops.list_users(
+            environment=environment,
+            limit=limit,
+            offset=offset,
+            role=role,
+            active=active,
+            search=search
+        ))
+        
+        if result['success']:
+            users = result['users']
+            pagination = result['pagination']
+            
+            click.echo(f"✅ Found {pagination['total_count']} users (showing {pagination['returned_count']}):")
+            click.echo("-" * 80)
+            
+            for user in users:
+                status = "✅" if user['active'] else "❌"
+                click.echo(f"{status} {user['username']} ({user['role']})")
+                if user['email']:
+                    click.echo(f"   Email: {user['email']}")
+                click.echo(f"   ID: {user['id']}, Created: {user['created_at']}")
+                click.echo()
+            
+            # Show pagination info
+            if pagination['has_more']:
+                next_offset = pagination['offset'] + pagination['limit']
+                click.echo(f"📄 To see more users, use: --offset {next_offset}")
+        else:
+            click.echo(f"❌ Failed to list users: {result.get('error', 'Unknown error')}")
+            sys.exit(1)
+            
+    except Exception as e:
+        click.echo(f"❌ Failed to list users: {e}", err=True)
+        sys.exit(1)
+
+
+@service.command("delete-user")
+@click.option("--username", help="Username of the user to delete")
+@click.option("--user-id", type=int, help="ID of the user to delete")
+@click.option("--environment", help="Environment to target (defaults to current)")
+@click.confirmation_option(prompt="Are you sure you want to delete this user?")
+@click.pass_context
+def service_delete_user(ctx: click.Context, username: Optional[str], user_id: Optional[int], environment: Optional[str]) -> None:
+    """Delete a user via web service API."""
+    config = ctx.obj["config"]
+    
+    if not username and not user_id:
+        click.echo("❌ Either --username or --user-id must be specified")
+        sys.exit(1)
+    
+    if username and user_id:
+        click.echo("❌ Specify either --username or --user-id, not both")
+        sys.exit(1)
+    
+    try:
+        from .service_operations import ServiceOperations
+        
+        parser = EnvironmentConfigParser(config)
+        project_config = parser.load_project_config()
+        
+        # Use current environment if not specified
+        if not environment:
+            environment = project_config.environment
+            click.echo(f"Using current environment: {environment}")
+        
+        if environment not in project_config.environments:
+            click.echo(f"❌ Environment '{environment}' not found")
+            sys.exit(1)
+        
+        identifier = username if username else f"ID {user_id}"
+        click.echo(f"🗑️ Deleting user '{identifier}' in environment '{environment}'...")
+        
+        service_ops = ServiceOperations(config)
+        result = asyncio.run(service_ops.delete_user(
+            environment=environment,
+            username=username,
+            user_id=user_id
+        ))
+        
+        if result['success']:
+            deleted_user = result['deleted_user']
+            click.echo(f"✅ User deleted successfully:")
+            click.echo(f"   ID: {deleted_user['id']}")
+            click.echo(f"   Username: {deleted_user['username']}")
+            click.echo(f"   Email: {deleted_user['email']}")
+        else:
+            click.echo(f"❌ Failed to delete user: {result.get('error', 'Unknown error')}")
+            sys.exit(1)
+            
+    except Exception as e:
+        click.echo(f"❌ Failed to delete user: {e}", err=True)
+        sys.exit(1)
 
 
 # Add missing import

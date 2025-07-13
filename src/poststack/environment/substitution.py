@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from ..config import EnvironmentConfig, VolumeConfig
+from ..service_registry import ServiceRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -19,11 +20,16 @@ logger = logging.getLogger(__name__)
 class VariableSubstitutor:
     """Engine for processing template files with variable substitution."""
     
-    def __init__(self, environment_name: str, environment_config: EnvironmentConfig, project_name: str = "poststack"):
+    def __init__(self, environment_name: str, environment_config: EnvironmentConfig, project_name: str = "poststack", service_registry: Optional[ServiceRegistry] = None):
         """Initialize substitutor with environment configuration."""
         self.environment_name = environment_name
         self.environment_config = environment_config
         self.project_name = project_name
+        self.service_registry = service_registry or ServiceRegistry(project_name, environment_name)
+        
+        # Register all deployments with the service registry
+        self._register_deployments()
+        
         self.variables = self._build_variable_map()
         
         logger.debug(f"Created variable substitutor for environment '{environment_name}' with {len(self.variables)} variables")
@@ -31,8 +37,6 @@ class VariableSubstitutor:
     def _build_variable_map(self) -> Dict[str, str]:
         """Build complete variable map from all sources."""
         variables = {}
-        
-        # PostgreSQL variables removed - auto-detection will be handled at runtime
         
         # Add basic environment variables
         variables.update(self._get_basic_variables())
@@ -43,8 +47,39 @@ class VariableSubstitutor:
         # Add user-defined variables from environment config
         variables.update(self.environment_config.variables)
         
+        # Add auto-generated service discovery variables
+        variables.update(self._get_service_discovery_variables())
+        
         # Add system environment variables (prefixed with POSTSTACK_)
         variables.update(self._get_system_variables())
+        
+        return variables
+    
+    def _register_deployments(self) -> None:
+        """Register all deployments with the service registry."""
+        for deployment in self.environment_config.deployments:
+            if deployment.enabled:
+                self.service_registry.register_service(
+                    name=deployment.get_deployment_name(),
+                    service_type=deployment.type or "generic",
+                    variables=deployment.variables
+                )
+                logger.debug(f"Registered deployment '{deployment.get_deployment_name()}' with service registry")
+    
+    def _get_service_discovery_variables(self) -> Dict[str, str]:
+        """Generate service discovery variables for all registered services."""
+        variables = {}
+        
+        # Generate variables for each deployment based on its dependencies
+        for deployment in self.environment_config.deployments:
+            if deployment.enabled and deployment.depends_on:
+                service_name = deployment.get_deployment_name()
+                dep_vars = self.service_registry.generate_service_variables(
+                    target_service=service_name,
+                    dependencies=deployment.depends_on
+                )
+                variables.update(dep_vars)
+                logger.debug(f"Generated {len(dep_vars)} service discovery variables for '{service_name}'")
         
         return variables
     

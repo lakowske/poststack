@@ -218,20 +218,22 @@ class RealContainerBuilder(ContainerBuilder):
             
             if process.returncode == 0:
                 result.status = BuildStatus.SUCCESS
+                result.exit_code = 0
                 logger.info(f"Successfully built project container {name} in {result.build_time:.1f}s")
             else:
                 result.status = BuildStatus.FAILED
-                result.error_message = process.stderr
+                result.exit_code = process.returncode
+                result.stderr = process.stderr
                 logger.error(f"Failed to build project container {name}: {process.stderr}")
                 
         except subprocess.TimeoutExpired:
             result.status = BuildStatus.FAILED
-            result.error_message = "Build timeout after 10 minutes"
+            result.stderr = "Build timeout after 10 minutes"
             logger.error(f"Project container build timeout: {name}")
             
         except Exception as e:
             result.status = BuildStatus.FAILED
-            result.error_message = str(e)
+            result.stderr = str(e)
             logger.error(f"Project container build exception: {name} - {e}")
         
         return result

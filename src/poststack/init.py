@@ -273,6 +273,27 @@ metadata:
     managed-by: poststack
     component: database
 spec:
+  # Init containers for volume permissions setup
+  initContainers:
+  - name: setup-postgres-volumes
+    image: localhost/poststack/postgres:latest
+    command: ['/bin/bash', '-c']
+    args:
+    - |
+      echo "Setting up PostgreSQL volume permissions..."
+      mkdir -p /data/postgres/data /data/postgres/logs /data/postgres/config
+      chown -R postgres:postgres /data/postgres
+      chmod 750 /data/postgres/data
+      chmod 755 /data/postgres/logs /data/postgres/config
+      echo "PostgreSQL volume setup complete"
+    volumeMounts:
+    - name: postgres-data
+      mountPath: /data/postgres/data
+    - name: postgres-logs
+      mountPath: /data/postgres/logs
+    - name: postgres-config
+      mountPath: /data/postgres/config
+
   containers:
   - name: postgres
     image: localhost/poststack/postgres:latest
@@ -347,16 +368,92 @@ spec:
       timeoutSeconds: 3
       failureThreshold: 3
 
+  # Volume Configuration Examples
   volumes:
+  # Example 1: emptyDir volumes (data doesn't persist across pod restarts)
   - name: postgres-data
     emptyDir: {}
   - name: postgres-logs
     emptyDir: {}
   - name: postgres-config
     emptyDir: {}
+
+  # Example 2: Named persistent volumes (uncomment and configure as needed)
+  # Note: Configure these volumes in your .poststack.yml deployment configuration
+  #- name: postgres-data
+  #  # Persistent volume - data survives pod restarts and environment stops
+  #  persistentVolumeClaim:
+  #    claimName: postgres-data-${POSTSTACK_ENVIRONMENT}
+  #- name: postgres-logs
+  #  # Named volume for log persistence
+  #  hostPath:
+  #    path: /var/lib/poststack/logs/${POSTSTACK_ENVIRONMENT}
+  #    type: DirectoryOrCreate
+
+  # Example 3: Host path volumes (uncomment and configure as needed)
+  #- name: postgres-data
+  #  # Direct host path mount - useful for development
+  #  hostPath:
+  #    path: /var/lib/poststack/postgres/${POSTSTACK_ENVIRONMENT}/data
+  #    type: DirectoryOrCreate
   
   restartPolicy: Always
 
+# ================================================================
+# VOLUME CONFIGURATION GUIDE
+# ================================================================
+#
+# Poststack supports three volume types for container storage:
+#
+# 1. emptyDir (default):
+#    - Temporary storage that doesn't persist across pod restarts
+#    - Good for development and testing
+#    - Example above shows emptyDir configuration
+#
+# 2. named:
+#    - Persistent named volumes managed by container runtime
+#    - Data persists across pod restarts and environment stops
+#    - Configure in .poststack.yml:
+#      volumes:
+#        postgres-data:
+#          type: named
+#          size: "5Gi"
+#          retention: 30
+#
+# 3. hostPath:
+#    - Direct mount from host filesystem
+#    - Useful for development or specific deployment needs
+#    - Configure in .poststack.yml:
+#      volumes:
+#        postgres-data:
+#          type: hostPath
+#          path: "/var/lib/myproject/postgres"
+#
+# Volume Configuration in .poststack.yml:
+# ------------------------------------
+# environments:
+#   dev:
+#     deployments:
+#       - pod: deploy/postgres-pod.yaml
+#         name: postgres
+#         variables:
+#           DB_NAME: myapp_dev
+#           DB_PORT: "5436"
+#         volumes:
+#           postgres-data:
+#             type: named
+#             size: "2Gi"
+#           postgres-logs:
+#             type: hostPath
+#             path: "/var/log/myproject/postgres"
+#
+# Init Container Benefits:
+# ----------------------
+# - Ensures correct ownership and permissions before main container starts
+# - Works with rootless podman and container security policies
+# - No need for host UID/GID mapping or privilege escalation
+# - Consistent permissions across different container runtimes
+#
 # Configuration Notes:
 # 
 # 1. Environment Variables:
@@ -365,7 +462,7 @@ spec:
 #
 # 2. Volumes:
 #    By default, this uses emptyDir volumes which don't persist data.
-#    For production, consider using persistentVolumeClaim volumes.
+#    Configure persistent volumes in your .poststack.yml for production.
 #
 # 3. Resource Limits:
 #    Adjust memory and CPU limits based on your workload requirements.
@@ -375,7 +472,11 @@ spec:
 #    The liveness probe ensures PostgreSQL is running and responding.
 #    The readiness probe ensures the database is ready to accept connections.
 #
-# 5. Customization:
+# 5. Init Containers:
+#    Sets up volume permissions without requiring host UID/GID mapping.
+#    This pattern works with all volume types and container runtimes.
+#
+# 6. Customization:
 #    You can modify this file to add additional environment variables,
 #    change resource limits, add volumes, or adjust health check settings.
 '''

@@ -72,7 +72,7 @@ set -e\n\
 # Check PostgreSQL service\n\
 if [ -f "$PGDATA/postmaster.pid" ]; then\n\
     # PostgreSQL is running, check if we can connect\n\
-    su - postgres -c "pg_isready -h localhost -p 5432" || exit 1\n\
+    pg_isready -h localhost -p 5432 || exit 1\n\
     echo "PostgreSQL health check passed"\n\
 else\n\
     echo "PostgreSQL not running"\n\

@@ -7,6 +7,7 @@ and data migration tasks.
 
 import logging
 import sys
+from pathlib import Path
 from typing import Optional
 
 import click
@@ -693,6 +694,109 @@ def shell(ctx: click.Context, command: Optional[str]) -> None:
         sys.exit(1)
     except Exception as e:
         click.echo(f"❌ Failed to open database shell: {e}", err=True)
+        sys.exit(1)
+
+
+@database.command()
+@click.option(
+    "--migrations-path",
+    type=click.Path(exists=True, path_type=Path),
+    default="./migrations",
+    help="Path to migrations directory (default: ./migrations)",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Show what migrations would be applied without running them",
+)
+@click.pass_context
+def migrate_project(ctx: click.Context, migrations_path: Path, dry_run: bool) -> None:
+    """Run project-specific database migrations from local migrations directory."""
+    config: PoststackConfig = ctx.obj["config"]
+
+    if not config.is_database_configured:
+        click.echo("❌ Database not configured or auto-detection failed.", err=True)
+        click.echo("Make sure PostgreSQL is running in your current environment.", err=True)
+        sys.exit(1)
+
+    try:
+        import subprocess
+        import urllib.parse
+        from pathlib import Path
+
+        # Get database connection details
+        effective_url = config.effective_database_url
+        parsed = urllib.parse.urlparse(effective_url)
+        
+        # Show connection info (masked)
+        import re
+        masked_url = re.sub(r"://([^:]+):([^@]+)@", r"://\1:***@", effective_url)
+        click.echo(f"🔗 Database: {masked_url}")
+        click.echo(f"📁 Migrations path: {migrations_path}")
+
+        # Find migration files
+        migration_files = sorted([
+            f for f in migrations_path.glob("*.sql") 
+            if not f.name.endswith(".rollback.sql")
+        ])
+
+        if not migration_files:
+            click.echo(f"❌ No migration files found in {migrations_path}")
+            sys.exit(1)
+
+        click.echo(f"📋 Found {len(migration_files)} migration(s):")
+        for migration_file in migration_files:
+            click.echo(f"  - {migration_file.name}")
+
+        if dry_run:
+            click.echo("\n🔍 Dry run - no migrations were executed")
+            return
+
+        if not click.confirm(f"\nApply {len(migration_files)} migration(s)?"):
+            click.echo("Migration cancelled")
+            return
+
+        # Set up environment for psql
+        env = {}
+        if parsed.password:
+            env["PGPASSWORD"] = parsed.password
+
+        # Apply each migration
+        success_count = 0
+        for migration_file in migration_files:
+            click.echo(f"🔄 Applying: {migration_file.name}")
+            
+            cmd = [
+                "psql",
+                f"--host={parsed.hostname}",
+                f"--port={parsed.port or 5432}",
+                f"--username={parsed.username}",
+                f"--dbname={parsed.path[1:]}",  # Remove leading slash
+                "-f", str(migration_file),
+                "-v", "ON_ERROR_STOP=1"
+            ]
+
+            result = subprocess.run(cmd, env=env, capture_output=True, text=True)
+
+            if result.returncode == 0:
+                click.echo(f"  ✅ Success: {migration_file.name}")
+                success_count += 1
+            else:
+                click.echo(f"  ❌ Failed: {migration_file.name}")
+                click.echo(f"     Error: {result.stderr.strip()}")
+                break
+
+        if success_count == len(migration_files):
+            click.echo(f"\n🎉 All migrations applied successfully! ({success_count}/{len(migration_files)})")
+        else:
+            click.echo(f"\n⚠️  Migration stopped at failure. Applied: {success_count}/{len(migration_files)}")
+            sys.exit(1)
+
+    except FileNotFoundError:
+        click.echo("❌ psql not found. Install PostgreSQL client tools.", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"❌ Migration failed: {e}", err=True)
         sys.exit(1)
 
 
