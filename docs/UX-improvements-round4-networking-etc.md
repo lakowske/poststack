@@ -100,9 +100,9 @@ environments:
 **Solution B**: Provide multiple host variables
 ```yaml
 # Automatically set by poststack:
-POSTSTACK_DB_HOST=localhost                    # For host access
-POSTSTACK_DB_HOST_CONTAINER=host.containers.internal  # For container access
-POSTSTACK_DB_HOST_POD=127.0.0.1               # For pod-internal access
+DB_HOST=localhost                    # For host access
+DB_HOST_CONTAINER=host.containers.internal  # For container access
+DB_HOST_POD=127.0.0.1               # For pod-internal access
 ```
 
 ### 2. Service Dependencies & Init Support

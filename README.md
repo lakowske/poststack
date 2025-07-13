@@ -731,11 +731,11 @@ Poststack automatically provides these variables to your deployment files:
 #### Built-in Variables (Automatically Provided)
 - `${POSTSTACK_DATABASE_URL}` - Complete PostgreSQL connection string
 - `${POSTSTACK_ENVIRONMENT}` - Environment name (dev, staging, production)
-- `${POSTSTACK_DB_HOST}` - Database host
-- `${POSTSTACK_DB_PORT}` - Database port  
-- `${POSTSTACK_DB_NAME}` - Database name
-- `${POSTSTACK_DB_USER}` - Database user
-- `${POSTSTACK_DB_PASSWORD}` - Database password
+- `${DB_HOST}` - Database host
+- `${DB_PORT}` - Database port  
+- `${DB_NAME}` - Database name
+- `${DB_USER}` - Database user
+- `${DB_PASSWORD}` - Database password
 
 #### Custom Variables
 Define your own variables in the environment configuration:

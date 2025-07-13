@@ -199,11 +199,11 @@ class PoststackProjectConfig(BaseModel):
 Poststack automatically provides:
 - `POSTSTACK_DATABASE_URL`: Full postgres connection string
 - `POSTSTACK_ENVIRONMENT`: Environment name (dev, staging, production)
-- `POSTSTACK_DB_HOST`: Database host
-- `POSTSTACK_DB_PORT`: Database port
-- `POSTSTACK_DB_NAME`: Database name
-- `POSTSTACK_DB_USER`: Database user
-- `POSTSTACK_DB_PASSWORD`: Database password
+- `DB_HOST`: Database host
+- `DB_PORT`: Database port
+- `DB_NAME`: Database name
+- `DB_USER`: Database user
+- `DB_PASSWORD`: Database password
 
 Plus user-defined variables from the environment configuration.
 
