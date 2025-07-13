@@ -8,7 +8,10 @@ visible and customizable in user projects.
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict
+
+import click
+import yaml
 
 from .config import PoststackConfig
 from .environment.config import EnvironmentConfigParser
@@ -25,6 +28,7 @@ class InitResult:
     docs_created: List[str]
     files_skipped: List[str]
     validation_errors: List[str]
+    config_created: bool = False
     error_message: Optional[str] = None
 
 
@@ -41,7 +45,14 @@ class InitCommand:
         self, 
         include_postgres: bool = True, 
         include_deploy: bool = True, 
-        force: bool = False
+        force: bool = False,
+        project_name: Optional[str] = None,
+        description: Optional[str] = None,
+        env_name: str = "dev",
+        db_name: Optional[str] = None,
+        db_port: int = 5433,
+        db_user: Optional[str] = None,
+        no_interactive: bool = False
     ) -> InitResult:
         """
         Initialize project with PostgreSQL configuration files.
@@ -61,8 +72,34 @@ class InitCommand:
         docs_created = []
         files_skipped = []
         validation_errors = []
+        config_created = False
         
         try:
+            # Check for .poststack.yml and create if needed
+            poststack_config_path = self.project_root / ".poststack.yml"
+            if not poststack_config_path.exists():
+                config_created = self._check_or_create_config(
+                    project_name=project_name,
+                    description=description,
+                    env_name=env_name,
+                    db_name=db_name,
+                    db_port=db_port,
+                    db_user=db_user,
+                    no_interactive=no_interactive
+                )
+                if not config_created:
+                    # User declined to create config
+                    return InitResult(
+                        success=False,
+                        postgres_files_created=[],
+                        deploy_files_created=[],
+                        docs_created=[],
+                        files_skipped=[],
+                        validation_errors=["Configuration creation cancelled by user"],
+                        config_created=False,
+                        error_message="Project initialization cancelled"
+                    )
+            
             # Validate project structure
             validation_errors = self._validate_project()
             if validation_errors and not force:
@@ -73,6 +110,7 @@ class InitCommand:
                     docs_created=[],
                     files_skipped=[],
                     validation_errors=validation_errors,
+                    config_created=config_created,
                     error_message="Project validation failed"
                 )
             
@@ -99,7 +137,8 @@ class InitCommand:
                 deploy_files_created=deploy_files_created,
                 docs_created=docs_created,
                 files_skipped=files_skipped,
-                validation_errors=[]
+                validation_errors=[],
+                config_created=config_created
             )
             
         except Exception as e:
@@ -111,6 +150,7 @@ class InitCommand:
                 docs_created=docs_created,
                 files_skipped=files_skipped,
                 validation_errors=validation_errors,
+                config_created=config_created,
                 error_message=str(e)
             )
     
@@ -181,16 +221,15 @@ class InitCommand:
         return {"created": created, "skipped": skipped}
     
     def _create_deploy_files(self, force: bool) -> dict:
-        """Create PostgreSQL deployment files in deploy/."""
+        """Create PostgreSQL deployment files in containers/postgres/."""
         created = []
         skipped = []
         
-        # Create deploy directory
-        deploy_dir = self.project_root / "deploy"
-        deploy_dir.mkdir(parents=True, exist_ok=True)
+        # Create postgres-pod.yaml template in containers/postgres/
+        postgres_dir = self.project_root / "containers" / "postgres"
+        postgres_dir.mkdir(parents=True, exist_ok=True)
         
-        # Create postgres-pod.yaml template
-        pod_file = deploy_dir / "postgres-pod.yaml"
+        pod_file = postgres_dir / "postgres-pod.yaml"
         
         if pod_file.exists() and not force:
             skipped.append(str(pod_file.relative_to(self.project_root)))
@@ -204,12 +243,12 @@ class InitCommand:
         return {"created": created, "skipped": skipped}
     
     def _create_documentation(self, force: bool) -> dict:
-        """Create documentation files."""
+        """Create documentation files in containers/postgres/docs/."""
         created = []
         skipped = []
         
-        # Create docs directory
-        docs_dir = self.project_root / "docs"
+        # Create docs directory inside containers/postgres/
+        docs_dir = self.project_root / "containers" / "postgres" / "docs"
         docs_dir.mkdir(parents=True, exist_ok=True)
         
         # Create PostgreSQL configuration documentation
@@ -641,3 +680,216 @@ After customizing the configuration:
 - [PostgreSQL Performance Tuning](https://wiki.postgresql.org/wiki/Performance_Optimization)
 - [Podman Pod Documentation](https://docs.podman.io/en/latest/markdown/podman-pod.1.html)
 '''
+    
+    def _check_or_create_config(
+        self,
+        project_name: Optional[str],
+        description: Optional[str],
+        env_name: str,
+        db_name: Optional[str],
+        db_port: int,
+        db_user: Optional[str],
+        no_interactive: bool
+    ) -> bool:
+        """Check for .poststack.yml and create if needed.
+        
+        Returns:
+            True if config was created or user wants to proceed, False if cancelled
+        """
+        if no_interactive:
+            # Non-interactive mode: create with defaults
+            config_data = self._build_config_data(
+                project_name=project_name,
+                description=description,
+                env_name=env_name,
+                db_name=db_name,
+                db_port=db_port,
+                db_user=db_user
+            )
+            self._write_config_file(config_data)
+            click.echo("✅ Created .poststack.yml")
+            return True
+        else:
+            # Interactive mode
+            if click.confirm("\nNo .poststack.yml found. Would you like to create one?", default=True):
+                config_data = self._interactive_config_builder(
+                    project_name=project_name,
+                    description=description,
+                    env_name=env_name,
+                    db_name=db_name,
+                    db_port=db_port,
+                    db_user=db_user
+                )
+                self._write_config_file(config_data)
+                click.echo("✅ Created .poststack.yml")
+                return True
+            else:
+                return False
+    
+    def _interactive_config_builder(
+        self,
+        project_name: Optional[str],
+        description: Optional[str],
+        env_name: str,
+        db_name: Optional[str],
+        db_port: int,
+        db_user: Optional[str]
+    ) -> Dict:
+        """Build configuration interactively with user prompts."""
+        # Get project name
+        default_project_name = project_name or self.project_root.name
+        project_name = click.prompt(
+            "\nProject name",
+            default=default_project_name,
+            type=str
+        )
+        
+        # Get project description
+        default_description = description or f"{project_name} project managed by poststack"
+        description = click.prompt(
+            "Project description",
+            default=default_description,
+            type=str
+        )
+        
+        # Get environment name
+        env_name = click.prompt(
+            "Environment name",
+            default=env_name,
+            type=str
+        )
+        
+        # Get database configuration
+        default_db_name = db_name or f"{project_name}_{env_name}"
+        db_name = click.prompt(
+            "Database name",
+            default=default_db_name,
+            type=str
+        )
+        
+        db_port = click.prompt(
+            "Database port",
+            default=db_port,
+            type=int
+        )
+        
+        default_db_user = db_user or f"{project_name}_user"
+        db_user = click.prompt(
+            "Database user",
+            default=default_db_user,
+            type=str
+        )
+        
+        return self._build_config_data(
+            project_name=project_name,
+            description=description,
+            env_name=env_name,
+            db_name=db_name,
+            db_port=db_port,
+            db_user=db_user
+        )
+    
+    def _build_config_data(
+        self,
+        project_name: Optional[str],
+        description: Optional[str],
+        env_name: str,
+        db_name: Optional[str],
+        db_port: int,
+        db_user: Optional[str]
+    ) -> Dict:
+        """Build configuration data structure."""
+        # Use defaults if not provided
+        project_name = project_name or self.project_root.name
+        description = description or f"{project_name} project managed by poststack"
+        db_name = db_name or f"{project_name}_{env_name}"
+        db_user = db_user or f"{project_name}_user"
+        
+        return {
+            "environment": env_name,
+            "project": {
+                "name": project_name,
+                "description": description
+            },
+            "environments": {
+                env_name: {
+                    "deployments": [
+                        {
+                            "pod": "containers/postgres/postgres-pod.yaml",
+                            "name": "postgres",
+                            "type": "postgres",
+                            "variables": {
+                                "DB_NAME": db_name,
+                                "DB_PORT": str(db_port),
+                                "DB_USER": db_user,
+                                "DB_PASSWORD": "auto_generated"
+                            }
+                        }
+                    ],
+                    "variables": {
+                        "LOG_LEVEL": "debug" if env_name == "dev" else "info",
+                        "ENVIRONMENT": "development" if env_name == "dev" else env_name
+                    },
+                    "init": [],
+                    "volumes": {}
+                }
+            }
+        }
+    
+    def _write_config_file(self, config_data: Dict) -> None:
+        """Write configuration to .poststack.yml with comments."""
+        config_path = self.project_root / ".poststack.yml"
+        
+        # Generate YAML with comments
+        yaml_content = f"""# Poststack project configuration
+# Generated by: poststack init
+
+environment: {config_data['environment']}  # Currently selected environment
+
+project:
+  name: {config_data['project']['name']}
+  description: "{config_data['project']['description']}"
+
+environments:
+  {config_data['environment']}:
+    # Deployment configuration
+    deployments:
+      # PostgreSQL deployment
+      - pod: containers/postgres/postgres-pod.yaml
+        name: postgres
+        type: postgres
+        variables:
+          DB_NAME: {config_data['environments'][config_data['environment']]['deployments'][0]['variables']['DB_NAME']}
+          DB_PORT: "{config_data['environments'][config_data['environment']]['deployments'][0]['variables']['DB_PORT']}"
+          DB_USER: {config_data['environments'][config_data['environment']]['deployments'][0]['variables']['DB_USER']}
+          DB_PASSWORD: auto_generated
+      
+      # Add your application deployment here
+      # - pod: containers/app/app-pod.yaml
+      #   name: app
+      #   variables:
+      #     APP_PORT: "8080"
+    
+    # Environment-wide variables
+    variables:
+      LOG_LEVEL: {config_data['environments'][config_data['environment']]['variables']['LOG_LEVEL']}
+      ENVIRONMENT: {config_data['environments'][config_data['environment']]['variables']['ENVIRONMENT']}
+    
+    # Optional: Init containers (migrations, setup)
+    init: []
+    # Example:
+    # - pod: containers/migrations/migrations-pod.yaml
+    #   name: migrations
+    
+    # Volume configuration (if needed)
+    volumes: {{}}
+    # Example:
+    # postgres-data:
+    #   type: named
+    #   size: "5Gi"
+"""
+        
+        with open(config_path, 'w') as f:
+            f.write(yaml_content)
+        
+        logger.info(f"Created .poststack.yml at {config_path}")

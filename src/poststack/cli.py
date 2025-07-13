@@ -655,18 +655,29 @@ from .init import InitCommand
 @click.option("--deploy", is_flag=True, help="Include PostgreSQL deployment files")
 @click.option("--all", "include_all", is_flag=True, help="Include all PostgreSQL files")
 @click.option("--force", is_flag=True, help="Overwrite existing files")
+@click.option("--project-name", help="Project name (defaults to current directory name)")
+@click.option("--description", help="Project description")
+@click.option("--env-name", default="dev", help="Environment name (default: dev)")
+@click.option("--db-name", help="Database name (defaults to {project_name}_{env_name})")
+@click.option("--db-port", type=int, default=5433, help="Database port (default: 5433)")
+@click.option("--db-user", help="Database user (defaults to {project_name}_user)")
+@click.option("--no-interactive", is_flag=True, help="Skip interactive prompts, use defaults/flags")
 @click.pass_context
-def init(ctx: click.Context, postgres: bool, deploy: bool, include_all: bool, force: bool) -> None:
+def init(ctx: click.Context, postgres: bool, deploy: bool, include_all: bool, force: bool,
+         project_name: Optional[str], description: Optional[str], env_name: str,
+         db_name: Optional[str], db_port: int, db_user: Optional[str], no_interactive: bool) -> None:
     """Initialize project with PostgreSQL configuration files.
     
     Makes PostgreSQL container and deployment configuration visible and customizable
     by copying template files to your project's containers/ and deploy/ directories.
+    If no .poststack.yml exists, it will offer to create one with sensible defaults.
     
     Examples:
-        poststack init --all          # Copy all PostgreSQL files
+        poststack init --all          # Interactive mode (default)
         poststack init --postgres     # Copy only container files  
         poststack init --deploy       # Copy only deployment files
         poststack init --all --force  # Overwrite existing files
+        poststack init --all --project-name myapp --no-interactive  # Non-interactive
     """
     config = ctx.obj["config"]
     
@@ -692,11 +703,22 @@ def init(ctx: click.Context, postgres: bool, deploy: bool, include_all: bool, fo
         result = init_cmd.initialize_project(
             include_postgres=include_postgres,
             include_deploy=include_deploy,
-            force=force
+            force=force,
+            project_name=project_name,
+            description=description,
+            env_name=env_name,
+            db_name=db_name,
+            db_port=db_port,
+            db_user=db_user,
+            no_interactive=no_interactive
         )
         
         if result.success:
             click.echo("✅ Project initialization completed successfully!")
+            
+            if result.config_created:
+                click.echo(f"\n📋 Configuration file created:")
+                click.echo(f"   - .poststack.yml")
             
             if result.postgres_files_created:
                 click.echo(f"\n📦 PostgreSQL container files created:")

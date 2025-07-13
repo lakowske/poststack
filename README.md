@@ -27,7 +27,25 @@ Poststack features a powerful CLI that handles PostgreSQL container building, da
    pip install poststack
    ```
 
-3. **Create Environment Configuration** (.poststack.yml):
+3. **Initialize Your Project**
+   ```bash
+   # Interactive mode - prompts for configuration
+   poststack init --all
+   
+   # Non-interactive mode - uses defaults
+   poststack init --all --no-interactive
+   
+   # Custom configuration
+   poststack init --all --project-name myapp --db-port 5435 --no-interactive
+   ```
+   
+   The `init` command will:
+   - Create `.poststack.yml` if it doesn't exist (with interactive prompts or defaults)
+   - Copy PostgreSQL container configuration files to `containers/postgres/`
+   - Create deployment template in `containers/postgres/postgres-pod.yaml`
+   - Generate documentation in `containers/postgres/docs/`
+
+4. **Review Generated Configuration** (.poststack.yml):
    ```yaml
    environment: dev  # Currently selected environment
    
@@ -42,13 +60,13 @@ Poststack features a powerful CLI that handles PostgreSQL container building, da
          user: myproject_dev_user
          password: auto_generated
        deployment:
-         pod: deploy/app-pod.yaml
+         pod: containers/app/app-pod.yaml
        variables:
          LOG_LEVEL: debug
          APP_PORT: "8080"
    ```
 
-4. **Create Deployment File** (deploy/app-pod.yaml):
+5. **Create Application Deployment File** (containers/app/app-pod.yaml):
    ```yaml
    apiVersion: v1
    kind: Pod
@@ -65,7 +83,7 @@ Poststack features a powerful CLI that handles PostgreSQL container building, da
          value: "${LOG_LEVEL}"
    ```
 
-5. **Build and Deploy**
+6. **Build and Deploy**
    ```bash
    # Build all images (base, postgres, project containers)
    poststack build
@@ -91,6 +109,35 @@ All operations provide comprehensive logging:
 - Environment operations include structured status reporting
 
 ## Core Features
+
+### Project Initialization
+
+The `poststack init` command helps you get started quickly:
+
+- **Automatic Configuration**: Creates `.poststack.yml` with sensible defaults if it doesn't exist
+- **Interactive Mode**: Prompts for project details (name, database settings, etc.)
+- **Non-Interactive Mode**: Uses defaults or command-line flags for automation
+- **Template Files**: Copies PostgreSQL configuration templates that you can customize
+- **Documentation**: Generates helpful documentation about the configuration
+
+#### Init Command Options
+
+```bash
+poststack init [OPTIONS]
+
+Options:
+  --postgres           Include PostgreSQL container files only
+  --deploy             Include deployment files only  
+  --all                Include all files (recommended)
+  --force              Overwrite existing files
+  --project-name TEXT  Project name (defaults to current directory)
+  --description TEXT   Project description
+  --env-name TEXT      Environment name (default: dev)
+  --db-name TEXT       Database name (defaults to {project}__{env})
+  --db-port INTEGER    Database port (default: 5433)
+  --db-user TEXT       Database user (defaults to {project}_user)
+  --no-interactive     Skip prompts, use defaults/flags
+```
 
 ### Container Management
 - **PostgreSQL Container**: Purpose-built PostgreSQL container with health checks
@@ -139,6 +186,13 @@ poststack env logs <env> [service]          # Show environment logs
 
 #### Essential Commands
 ```bash
+# Initialize a new project
+poststack init --all                  # Interactive mode (creates .poststack.yml if needed)
+poststack init --postgres             # Copy only PostgreSQL container files
+poststack init --deploy               # Copy only deployment files
+poststack init --all --no-interactive # Non-interactive with defaults
+poststack init --all --project-name myapp --db-port 5435 --no-interactive
+
 # Build all images (base, postgres, project containers)
 poststack build [--no-cache]
 
@@ -579,7 +633,7 @@ Poststack's environment management system provides professional multi-environmen
          user: myapp_dev_user
          password: auto_generated
        deployment:
-         pod: deploy/app-pod.yaml
+         pod: containers/app/app-pod.yaml
        variables:
          LOG_LEVEL: debug
          DEBUG_MODE: "true"
@@ -592,7 +646,7 @@ Poststack's environment management system provides professional multi-environmen
          user: myapp_prod_user
          password: auto_generated
        deployment:
-         compose: deploy/app-compose.yml
+         compose: containers/app/app-compose.yml
        variables:
          LOG_LEVEL: warn
          DEBUG_MODE: "false"
@@ -601,7 +655,7 @@ Poststack's environment management system provides professional multi-environmen
 
 2. **Create Deployment Files** with variable substitution:
    ```yaml
-   # deploy/app-pod.yaml
+   # containers/app/app-pod.yaml
    apiVersion: v1
    kind: Pod
    metadata:
@@ -656,13 +710,13 @@ environments:
       host: localhost                 # Database host
     
     init:                             # Optional: Initialization containers
-      - compose: deploy/init.yml      # Run before main deployment
-      - pod: deploy/migrations.yaml   # Init containers must exit cleanly
+      - compose: containers/init/init.yml      # Run before main deployment
+      - pod: containers/migrations/migrations.yaml   # Init containers must exit cleanly
     
     deployment:                       # Main application deployment
-      compose: deploy/app.yml         # Docker Compose file
+      compose: containers/app/app.yml         # Docker Compose file
       # OR
-      pod: deploy/app.yaml           # Podman Pod file
+      pod: containers/app/app.yaml           # Podman Pod file
     
     variables:                        # Environment-specific variables
       LOG_LEVEL: info
@@ -762,10 +816,10 @@ The init phase runs containers that must complete successfully before the main d
 environments:
   dev:
     init:
-      - compose: deploy/migrations.yml    # Database migrations
-      - pod: deploy/seed-data.yaml       # Seed test data
+      - compose: containers/migrations/migrations.yml    # Database migrations
+      - pod: containers/seed-data/seed-data.yaml       # Seed test data
     deployment:
-      pod: deploy/app.yaml              # Main application
+      pod: containers/app/app.yaml              # Main application
 ```
 
 **Init Phase Rules:**
@@ -784,7 +838,7 @@ Preview what variables will be substituted without actually deploying:
 poststack env dry-run dev
 
 # Show variables used in a specific file
-poststack env dry-run dev --file deploy/app-pod.yaml
+poststack env dry-run dev --file containers/app/app-pod.yaml
 ```
 
 #### Status and Logs
@@ -822,7 +876,7 @@ poststack env init dev
 **Variable Substitution Issues:**
 ```bash
 # Preview variables before deployment
-poststack env dry-run dev --file deploy/app.yaml
+poststack env dry-run dev --file containers/app/app.yaml
 
 # Check for undefined variables (shows as "UNDEFINED")
 ```
