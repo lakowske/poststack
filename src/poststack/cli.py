@@ -95,42 +95,79 @@ def cli(
     is_flag=True,
     help="Disable build cache",
 )
+@click.argument('services', nargs=-1, type=str)
 @click.pass_context
-def build(ctx: click.Context, no_cache: bool) -> None:
-    """Build all required images (base, postgres, project containers)."""
+def build(ctx: click.Context, no_cache: bool, services: tuple) -> None:
+    """Build images. If no services specified, builds all images (base, postgres, project containers).
+    
+    SERVICES: Optional list of specific services to build (postgres, apache, mail, etc.)
+    """
     config = ctx.obj["config"]
     
-    click.echo("🚀 Building all Poststack images...")
+    # Determine what to build based on services argument
+    build_all = len(services) == 0
+    services_set = set(services) if services else set()
+    
+    if build_all:
+        click.echo("🚀 Building all Poststack images...")
+    else:
+        click.echo(f"🚀 Building specified services: {', '.join(services)}...")
     
     try:
         builder = RealContainerBuilder(config)
         
-        # Step 1: Build base image
-        click.echo("\n📦 Building base-debian image...")
-        base_result = builder.build_base_image()
-        if not base_result.success:
-            click.echo(f"❌ Failed to build base-debian: {base_result.stderr}")
-            sys.exit(1)
-        click.echo(f"✅ base-debian built ({base_result.build_time:.1f}s)")
+        # Always build base image when building project containers or postgres
+        # (since they depend on it)
+        needs_base = build_all or 'postgres' in services_set or any(s not in ['postgres'] for s in services_set)
         
-        # Step 2: Build postgres image
-        click.echo("\n📦 Building postgres image...")
-        postgres_result = builder.build_postgres_image()
-        if not postgres_result.success:
-            click.echo(f"❌ Failed to build postgres: {postgres_result.stderr}")
-            sys.exit(1)
-        click.echo(f"✅ postgres built ({postgres_result.build_time:.1f}s)")
+        if needs_base:
+            # Step 1: Build base image
+            click.echo("\n📦 Building base-debian image...")
+            base_result = builder.build_base_image()
+            if not base_result.success:
+                click.echo(f"❌ Failed to build base-debian: {base_result.stderr}")
+                sys.exit(1)
+            click.echo(f"✅ base-debian built ({base_result.build_time:.1f}s)")
+        
+        # Step 2: Build postgres image if requested or building all
+        if build_all or 'postgres' in services_set:
+            click.echo("\n📦 Building postgres image...")
+            postgres_result = builder.build_postgres_image()
+            if not postgres_result.success:
+                click.echo(f"❌ Failed to build postgres: {postgres_result.stderr}")
+                sys.exit(1)
+            click.echo(f"✅ postgres built ({postgres_result.build_time:.1f}s)")
         
         # Step 3: Build project containers
-        click.echo("\n📦 Building project containers...")
         project_containers = discover_project_containers(config)
         
-        if project_containers:
-            click.echo(f"Found {len(project_containers)} project container(s):")
-            for name, info in project_containers.items():
+        # Filter project containers based on services argument
+        if build_all:
+            containers_to_build = project_containers
+        else:
+            containers_to_build = {
+                name: info for name, info in project_containers.items() 
+                if name in services_set
+            }
+            
+            # Check for invalid service names
+            valid_services = {'postgres'} | set(project_containers.keys())
+            invalid_services = services_set - valid_services
+            if invalid_services:
+                click.echo(f"❌ Unknown services: {', '.join(invalid_services)}")
+                click.echo(f"Available services: {', '.join(sorted(valid_services))}")
+                sys.exit(1)
+        
+        if containers_to_build:
+            if build_all:
+                click.echo(f"\n📦 Building all {len(containers_to_build)} project containers...")
+            else:
+                click.echo(f"\n📦 Building {len(containers_to_build)} specified project containers...")
+                
+            for name, info in containers_to_build.items():
                 click.echo(f"  - {name}: {info['description']}")
             
-            for name, container_info in project_containers.items():
+            for name, container_info in containers_to_build.items():
                 click.echo(f"\n🔨 Building {name}...")
                 result = builder.build_project_container(
                     name=name,
@@ -145,10 +182,13 @@ def build(ctx: click.Context, no_cache: bool) -> None:
                     error_msg = result.stderr or "Unknown error"
                     click.echo(f"❌ {name} failed: {error_msg}")
                     sys.exit(1)
-        else:
-            click.echo("No project containers found")
+        elif not build_all:
+            click.echo("No matching project containers found to build")
         
-        click.echo("\n🎉 All images built successfully!")
+        if build_all:
+            click.echo("\n🎉 All images built successfully!")
+        else:
+            click.echo(f"\n🎉 Specified services built successfully!")
         
     except Exception as e:
         click.echo(f"❌ Build failed: {e}", err=True)

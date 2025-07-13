@@ -20,7 +20,7 @@ class VolumeConfig(BaseModel):
     """Volume configuration for container storage."""
     type: str = Field("emptyDir", description="Volume type: emptyDir, named, hostPath")
     name: Optional[str] = Field(None, description="Custom volume name override")
-    size: Optional[str] = Field("1Gi", description="Volume size for named volumes")
+    size: Optional[str] = Field(None, description="Volume size for named volumes")
     path: Optional[str] = Field(None, description="Host path for hostPath volumes")
     retention: int = Field(30, description="Days to keep volume after environment deletion")
     
