@@ -144,6 +144,123 @@ class EnvironmentOrchestrator:
                 total_duration=asyncio.get_event_loop().time() - start_time
             )
     
+    async def validate_environment(self, env_name: str) -> EnvironmentResult:
+        """
+        Validate environment templates without deploying.
+        
+        Args:
+            env_name: Environment name to validate
+            
+        Returns:
+            EnvironmentResult with validation status
+        """
+        start_time = asyncio.get_event_loop().time()
+        
+        logger.info(f"Validating environment templates: {env_name}")
+        
+        try:
+            # Load and validate environment configuration
+            env_config = self.config_parser.get_environment_config(env_name)
+            project_config = self.config_parser.load_project_config()
+            
+            # Create variable substitutor with environment variables
+            substitutor = VariableSubstitutor(env_name, env_config, project_config.project.name)
+            
+            # Validate init templates
+            init_results = []
+            for init_ref in env_config.init:
+                if init_ref.enabled:
+                    try:
+                        # Process template to validate syntax
+                        if init_ref.compose:
+                            substitutor.process_file(init_ref.compose)
+                        elif init_ref.pod:
+                            substitutor.process_file(init_ref.pod)
+                        
+                        init_results.append(PhaseResult(
+                            success=True,
+                            exit_code=0,
+                            duration=0.0,
+                            logs="Template validation successful",
+                            command="validate",
+                            file_path=init_ref.pod or init_ref.compose or ""
+                        ))
+                    except Exception as e:
+                        init_results.append(PhaseResult(
+                            success=False,
+                            exit_code=1,
+                            duration=0.0,
+                            logs=f"Template validation failed: {e}",
+                            command="validate",
+                            file_path=init_ref.pod or init_ref.compose or ""
+                        ))
+            
+            # Validate deployment templates
+            deployment_results = []
+            for deployment in env_config.deployments:
+                if deployment.enabled:
+                    try:
+                        logger.debug(f"Validating deployment: {deployment.name}, pod: {deployment.pod}, type: {type(deployment.pod)}")
+                        
+                        # Create deployment-specific substitutor with dependencies
+                        deployment_substitutor = self._create_deployment_substitutor_with_dependencies(substitutor, deployment)
+                        
+                        # Process template to validate syntax
+                        if deployment.compose:
+                            logger.debug(f"Processing compose file: {deployment.compose}")
+                            deployment_substitutor.process_file(deployment.compose)
+                        elif deployment.pod:
+                            logger.debug(f"Processing pod file: {deployment.pod}")
+                            deployment_substitutor.process_file(deployment.pod)
+                        
+                        deployment_results.append(PhaseResult(
+                            success=True,
+                            exit_code=0,
+                            duration=0.0,
+                            logs="Template validation successful",
+                            command="validate",
+                            file_path=deployment.pod or deployment.compose or ""
+                        ))
+                    except Exception as e:
+                        logger.error(f"Validation failed for {deployment.name}: {e}")
+                        deployment_results.append(PhaseResult(
+                            success=False,
+                            exit_code=1,
+                            duration=0.0,
+                            logs=f"Template validation failed: {e}",
+                            command="validate",
+                            file_path=deployment.pod or deployment.compose or ""
+                        ))
+            
+            # Check if all validations succeeded
+            success = all(r.success for r in init_results + deployment_results)
+            error_message = None
+            if not success:
+                failed_validations = [r for r in init_results + deployment_results if not r.success]
+                error_message = f"Template validation failed for {len(failed_validations)} deployment(s)"
+            
+            return EnvironmentResult(
+                environment_name=env_name,
+                success=success,
+                init_results=init_results,
+                deployment_results=deployment_results,
+                error_message=error_message,
+                total_duration=asyncio.get_event_loop().time() - start_time
+            )
+            
+        except Exception as e:
+            import traceback
+            logger.error(f"Environment validation failed: {env_name} - {e}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+            return EnvironmentResult(
+                environment_name=env_name,
+                success=False,
+                init_results=[],
+                deployment_results=[],
+                error_message=str(e),
+                total_duration=asyncio.get_event_loop().time() - start_time
+            )
+    
     async def stop_environment(self, env_name: str, remove: bool = False) -> bool:
         """
         Stop all containers for an environment.
@@ -369,13 +486,17 @@ class EnvironmentOrchestrator:
             for deployment in ready_deployments:
                 logger.info(f"Deploying service: {deployment.get_deployment_name()}")
                 
-                # Create deployment-specific substitutor with merged variables
-                deployment_substitutor = self._create_deployment_substitutor(substitutor, deployment)
+                # Create deployment-specific substitutor with dependencies and merged variables
+                deployment_substitutor = self._create_deployment_substitutor_with_dependencies(substitutor, deployment)
                 
                 if deployment.compose:
                     result = await self._run_compose_deployment(deployment.compose, deployment_substitutor)
                 elif deployment.pod:
-                    network_name = f"{deployment_substitutor.project_name}-{deployment_substitutor.environment_name}"
+                    # Check if this deployment uses host networking
+                    uses_host_network = self._deployment_uses_host_network(deployment_substitutor, deployment)
+                    network_name = None if uses_host_network else f"{deployment_substitutor.project_name}-{deployment_substitutor.environment_name}"
+                    
+                    logger.debug(f"Deployment {deployment.name} uses host networking: {uses_host_network}")
                     result = await self._run_pod_deployment(deployment.pod, deployment_substitutor, network_name)
                 else:
                     result = PhaseResult(
@@ -399,20 +520,62 @@ class EnvironmentOrchestrator:
     def _create_deployment_substitutor(self, base_substitutor: VariableSubstitutor, deployment: DeploymentRef) -> VariableSubstitutor:
         """Create a deployment-specific variable substitutor."""
         # Create a new substitutor with deployment-specific variables
-        deployment_variables = base_substitutor.get_all_variables().copy()
+        deployment_variables = base_substitutor.get_variables().copy()
         deployment_variables.update(deployment.variables)
         
-        # Create new substitutor instance with merged variables
+        # Create new substitutor instance with merged variables (using dict constructor)
         new_substitutor = VariableSubstitutor(
-            base_substitutor.environment_name,
+            deployment_variables,  # Pass variables dict as first parameter
             base_substitutor.environment_config,
             base_substitutor.project_name
         )
         
-        # Override variables with deployment-specific ones
-        new_substitutor.variables.update(deployment_variables)
+        # Preserve environment name from base substitutor
+        new_substitutor.environment_name = base_substitutor.environment_name
         
         return new_substitutor
+    
+    def _create_deployment_substitutor_with_dependencies(self, base_substitutor: VariableSubstitutor, deployment: DeploymentRef) -> VariableSubstitutor:
+        """Create a deployment-specific variable substitutor with service discovery variables."""
+        # Create a new substitutor with deployment-specific variables
+        deployment_variables = base_substitutor.get_variables().copy()
+        deployment_variables.update(deployment.variables)
+        
+        # Add service discovery variables for this deployment's dependencies
+        if hasattr(deployment, 'depends_on') and deployment.depends_on:
+            service_vars = base_substitutor.service_registry.generate_service_variables(deployment.name, deployment.depends_on)
+            deployment_variables.update(service_vars)
+        
+        # Create new substitutor instance with merged variables (using dict constructor)
+        new_substitutor = VariableSubstitutor(
+            deployment_variables,  # Pass variables dict as first parameter
+            base_substitutor.environment_config,
+            base_substitutor.project_name
+        )
+        
+        # Preserve environment name from base substitutor
+        new_substitutor.environment_name = base_substitutor.environment_name
+        
+        return new_substitutor
+    
+    def _deployment_uses_host_network(self, substitutor: VariableSubstitutor, deployment: DeploymentRef) -> bool:
+        """Check if a deployment uses host networking by examining the template variables."""
+        variables = substitutor.get_variables()
+        
+        # Check for service-specific host network variables first (highest priority)
+        if deployment.name == 'apache':
+            return variables.get('APACHE_USE_HOST_NETWORK', '').lower() == 'true'
+        elif deployment.name == 'mail':
+            return variables.get('MAIL_USE_HOST_NETWORK', '').lower() == 'true'
+        
+        # Some services like postgres should use bridge networking even with global host mode
+        # They use host port mappings instead of host networking
+        if deployment.name in ['postgres', 'volume-setup']:
+            return False
+        
+        # Check for general network mode setting for other services
+        network_mode = variables.get('NETWORK_MODE', '').lower()
+        return network_mode == 'host'
     
     async def _run_compose_init(self, compose_file: str, substitutor: VariableSubstitutor, index: int) -> PhaseResult:
         """Run a Docker Compose init container and wait for completion."""

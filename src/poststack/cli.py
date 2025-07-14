@@ -232,8 +232,9 @@ def env_list(ctx: click.Context) -> None:
 
 @env.command("start")
 @click.argument("environment", required=False)
+@click.option("--dry-run", is_flag=True, help="Show what would be deployed without actually deploying")
 @click.pass_context
-def env_start(ctx: click.Context, environment: Optional[str]) -> None:
+def env_start(ctx: click.Context, environment: Optional[str], dry_run: bool) -> None:
     """Start an environment (current or specified)."""
     config = ctx.obj["config"]
     
@@ -251,22 +252,48 @@ def env_start(ctx: click.Context, environment: Optional[str]) -> None:
             click.echo(f"Available environments: {', '.join(project_config.environments.keys())}")
             sys.exit(1)
         
-        click.echo(f"🚀 Starting environment: {environment}")
-        
-        # Use the orchestrator to start the environment
-        orchestrator = EnvironmentOrchestrator(config)
-        result = asyncio.run(orchestrator.start_environment(environment))
-        
-        if result.success:
-            click.echo(f"✅ Environment '{environment}' started successfully")
-            if result.init_results:
-                click.echo(f"   Init containers: {len([r for r in result.init_results if r.success])}/{len(result.init_results)} succeeded")
-            if result.deployment_results:
-                successful_deployments = len([r for r in result.deployment_results if r.success])
-                click.echo(f"   Deployments: {successful_deployments}/{len(result.deployment_results)} succeeded")
+        if dry_run:
+            click.echo(f"🔍 Dry run: validating environment templates for '{environment}'")
+            
+            # Use the orchestrator to validate templates without deploying
+            orchestrator = EnvironmentOrchestrator(config)
+            result = asyncio.run(orchestrator.validate_environment(environment))
+            
+            if result.success:
+                click.echo(f"✅ Environment '{environment}' templates are valid")
+                click.echo(f"\n📋 Would deploy:")
+                if result.init_results:
+                    click.echo(f"   Init containers: {len(result.init_results)}")
+                    for init_result in result.init_results:
+                        file_name = init_result.file_path.split('/')[-1] if init_result.file_path else "unknown"
+                        click.echo(f"     - {file_name}")
+                if result.deployment_results:
+                    click.echo(f"   Main deployments: {len(result.deployment_results)}")
+                    for deploy_result in result.deployment_results:
+                        file_name = deploy_result.file_path.split('/')[-1] if deploy_result.file_path else "unknown"
+                        click.echo(f"     - {file_name}")
+                
+                click.echo(f"\n📝 Run without --dry-run to actually deploy")
+            else:
+                click.echo(f"❌ Template validation failed: {result.error_message}")
+                sys.exit(1)
         else:
-            click.echo(f"❌ Failed to start environment: {result.error_message}")
-            sys.exit(1)
+            click.echo(f"🚀 Starting environment: {environment}")
+            
+            # Use the orchestrator to start the environment
+            orchestrator = EnvironmentOrchestrator(config)
+            result = asyncio.run(orchestrator.start_environment(environment))
+            
+            if result.success:
+                click.echo(f"✅ Environment '{environment}' started successfully")
+                if result.init_results:
+                    click.echo(f"   Init containers: {len([r for r in result.init_results if r.success])}/{len(result.init_results)} succeeded")
+                if result.deployment_results:
+                    successful_deployments = len([r for r in result.deployment_results if r.success])
+                    click.echo(f"   Deployments: {successful_deployments}/{len(result.deployment_results)} succeeded")
+            else:
+                click.echo(f"❌ Failed to start environment: {result.error_message}")
+                sys.exit(1)
             
     except Exception as e:
         click.echo(f"❌ Failed to start environment: {e}", err=True)

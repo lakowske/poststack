@@ -1,5 +1,5 @@
 """
-Variable substitution engine for deployment files.
+Variable substitution engine for deployment files using Jinja2.
 
 Provides template processing for Docker Compose and Podman Pod files
 with automatic database configuration injection and custom variables.
@@ -7,9 +7,11 @@ with automatic database configuration injection and custom variables.
 
 import logging
 import os
-import re
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional
+
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, Undefined
 
 from ..config import EnvironmentConfig, VolumeConfig
 from ..service_registry import ServiceRegistry
@@ -18,21 +20,41 @@ logger = logging.getLogger(__name__)
 
 
 class VariableSubstitutor:
-    """Engine for processing template files with variable substitution."""
+    """Engine for processing template files with Jinja2 variable substitution."""
     
-    def __init__(self, environment_name: str, environment_config: EnvironmentConfig, project_name: str = "poststack", service_registry: Optional[ServiceRegistry] = None):
-        """Initialize substitutor with environment configuration."""
-        self.environment_name = environment_name
+    def __init__(self, environment_name_or_variables, environment_config: EnvironmentConfig = None, project_name: str = "poststack", service_registry: Optional[ServiceRegistry] = None):
+        """Initialize substitutor with environment configuration or direct variables."""
+        
+        # Set basic attributes first
         self.environment_config = environment_config
         self.project_name = project_name
-        self.service_registry = service_registry or ServiceRegistry(project_name, environment_name)
         
-        # Register all deployments with the service registry
-        self._register_deployments()
+        # Handle both old style (env_name, config) and new style (variables dict)
+        if isinstance(environment_name_or_variables, dict):
+            # New style: called with variables dict
+            self.variables = environment_name_or_variables.copy()
+            self.environment_name = None
+            self.service_registry = None
+        else:
+            # Old style: called with environment name and config
+            self.environment_name = environment_name_or_variables
+            self.service_registry = service_registry or ServiceRegistry(project_name, self.environment_name)
+            # Register all deployments with the service registry
+            self._register_deployments()
+            self.variables = self._build_variable_map()
         
-        self.variables = self._build_variable_map()
+        # Initialize Jinja2 environment
+        self.jinja_env = Environment(
+            loader=FileSystemLoader('.'),  # Use current directory as base
+            undefined=Undefined,           # Allow undefined variables with defaults
+            trim_blocks=True,              # Clean up whitespace
+            lstrip_blocks=True
+        )
         
-        logger.debug(f"Created variable substitutor for environment '{environment_name}' with {len(self.variables)} variables")
+        # Add custom filters
+        self.jinja_env.filters['default'] = lambda value, default='': value if value is not None else default
+        
+        logger.debug(f"Created variable substitutor for environment '{self.environment_name}' with {len(self.variables)} variables")
     
     def _build_variable_map(self) -> Dict[str, str]:
         """Build complete variable map from all sources."""
@@ -48,80 +70,71 @@ class VariableSubstitutor:
         variables.update(self.environment_config.variables)
         
         # Add auto-generated service discovery variables
-        variables.update(self._get_service_discovery_variables())
+        # Generate service variables for all registered services (for global template context)
+        for service_name in self.service_registry.services.keys():
+            service_vars = self.service_registry.generate_service_variables(service_name, [], target_networking_mode='bridge')
+            variables.update(service_vars)
         
-        # Add system environment variables (prefixed with POSTSTACK_)
+        # Add system environment variables (POSTSTACK_*)
         variables.update(self._get_system_variables())
         
+        logger.debug(f"Built variable map with {len(variables)} total variables")
         return variables
     
-    def _register_deployments(self) -> None:
+    def _register_deployments(self):
         """Register all deployments with the service registry."""
-        for deployment in self.environment_config.deployments:
-            if deployment.enabled:
-                self.service_registry.register_service(
-                    name=deployment.get_deployment_name(),
-                    service_type=deployment.type or "generic",
-                    variables=deployment.variables
-                )
-                logger.debug(f"Registered deployment '{deployment.get_deployment_name()}' with service registry")
-    
-    def _get_service_discovery_variables(self) -> Dict[str, str]:
-        """Generate service discovery variables for all registered services."""
-        variables = {}
+        if not self.environment_config.deployments:
+            return
         
-        # Generate variables for each deployment based on its dependencies
         for deployment in self.environment_config.deployments:
-            if deployment.enabled and deployment.depends_on:
-                service_name = deployment.get_deployment_name()
-                dep_vars = self.service_registry.generate_service_variables(
-                    target_service=service_name,
-                    dependencies=deployment.depends_on
-                )
-                variables.update(dep_vars)
-                logger.debug(f"Generated {len(dep_vars)} service discovery variables for '{service_name}'")
+            # Use deployment name directly from DeploymentRef
+            service_name = deployment.name
+            service_type = deployment.type or "web"  # Use deployment type or default to web
+            deployment_variables = deployment.variables or {}
+            
+            # Merge deployment variables with environment variables for networking mode detection
+            merged_variables = {}
+            merged_variables.update(self.environment_config.variables)  # Environment-level variables
+            merged_variables.update(deployment_variables)  # Deployment-specific variables
+            
+            self.service_registry.register_service(service_name, service_type, merged_variables)
         
-        return variables
+        logger.debug(f"Registered {len(self.environment_config.deployments)} deployments with service registry")
     
     def _get_basic_variables(self) -> Dict[str, str]:
-        """Get basic environment variables without PostgreSQL dependency."""
+        """Get basic poststack environment variables."""
         return {
             "ENVIRONMENT": self.environment_name,
             "PROJECT": self.project_name,
+            "POSTSTACK_ENVIRONMENT": self.environment_name,
         }
     
-    
     def _get_system_variables(self) -> Dict[str, str]:
-        """Get system environment variables that start with POSTSTACK_."""
-        variables = {}
-        
+        """Get system environment variables with POSTSTACK_ prefix."""
+        system_vars = {}
         for key, value in os.environ.items():
             if key.startswith("POSTSTACK_"):
-                # Don't override our built-in variables
-                if key not in self._get_poststack_variables():
-                    variables[key] = value
-        
-        return variables
+                system_vars[key] = value
+        return system_vars
     
     def _get_volume_variables(self) -> Dict[str, str]:
-        """Generate volume variables for template substitution."""
+        """Generate volume configuration variables for templates."""
         variables = {}
         
-        # Define standard volume names used in templates
-        standard_volumes = ['postgres_data', 'postgres_logs', 'postgres_config', 'apache_logs', 'apache_config']
+        # Standard volume names that templates expect
+        standard_volumes = ["postgres_data", "unified_logs", "mail_data", "apache_data", "mail_config"]
         
         # Process configured volumes
-        for volume_name, volume_config in self.environment_config.volumes.items():
-            # Convert volume name to uppercase for variable names
-            var_prefix = f"VOLUME_{volume_name.upper()}"
-            
-            # Generate volume type variable
-            volume_type = self._get_k8s_volume_type(volume_config)
-            variables[f"{var_prefix}_TYPE"] = volume_type
-            
-            # Generate volume configuration variable
-            volume_config_json = self._get_k8s_volume_config(volume_config, volume_name)
-            variables[f"{var_prefix}_CONFIG"] = volume_config_json
+        if hasattr(self.environment_config, 'volumes') and self.environment_config.volumes:
+            for volume_name, volume_config in self.environment_config.volumes.items():
+                # Generate volume type variable (e.g., VOLUME_POSTGRES_DATA_TYPE)
+                var_prefix = f"VOLUME_{volume_name.upper()}"
+                volume_type = self._get_k8s_volume_type(volume_config)
+                variables[f"{var_prefix}_TYPE"] = volume_type
+                
+                # Generate volume configuration variable
+                volume_config_json = self._get_k8s_volume_config(volume_config, volume_name)
+                variables[f"{var_prefix}_CONFIG"] = volume_config_json
         
         # Provide defaults for standard volumes that aren't configured
         for volume_name in standard_volumes:
@@ -157,10 +170,10 @@ class VariableSubstitutor:
     
     def process_file(self, file_path: str, output_path: Optional[str] = None) -> str:
         """
-        Process template file and return substituted content.
+        Process template file using Jinja2 and return substituted content.
         
         Args:
-            file_path: Path to template file
+            file_path: Path to template file (.j2 extension expected)
             output_path: Optional path to write processed file
             
         Returns:
@@ -171,7 +184,7 @@ class VariableSubstitutor:
         if not file_path.exists():
             raise ValueError(f"Template file not found: {file_path}")
         
-        logger.info(f"Processing template file: {file_path}")
+        logger.info(f"Processing Jinja2 template file: {file_path}")
         
         # Read template content
         try:
@@ -180,8 +193,12 @@ class VariableSubstitutor:
         except Exception as e:
             raise ValueError(f"Failed to read template file {file_path}: {e}")
         
-        # Process substitutions
-        processed_content = self._substitute_variables(template_content, str(file_path))
+        # Process Jinja2 template
+        try:
+            template = self.jinja_env.from_string(template_content)
+            processed_content = template.render(**self.variables)
+        except Exception as e:
+            raise ValueError(f"Failed to process Jinja2 template {file_path}: {e}")
         
         # Write to output file if specified
         if output_path:
@@ -197,135 +214,80 @@ class VariableSubstitutor:
         
         return processed_content
     
-    def _substitute_variables(self, content: str, file_context: str) -> str:
-        """Substitute variables in content using ${VAR} syntax."""
-        # Pattern matches ${VAR} or ${VAR:-default_value}
-        pattern = r'\$\{([A-Za-z_][A-Za-z0-9_]*)(?::(-[^}]*))?\}'
-        
-        def replace_variable(match):
-            var_name = match.group(1)
-            default_value = match.group(2)
-            
-            # Remove leading dash from default value if present
-            if default_value and default_value.startswith('-'):
-                default_value = default_value[1:]
-            
-            if var_name in self.variables:
-                value = self.variables[var_name]
-                logger.debug(f"Substituting ${{{var_name}}} -> '{value}' in {file_context}")
-                return value
-            elif default_value is not None:
-                logger.debug(f"Using default value for ${{{var_name}}} -> '{default_value}' in {file_context}")
-                return default_value
-            else:
-                logger.warning(f"Undefined variable ${{{var_name}}} in {file_context}, leaving unchanged")
-                return match.group(0)  # Return original ${VAR} unchanged
-        
-        return re.sub(pattern, replace_variable, content)
-    
-    def dry_run(self, file_path: str) -> Dict[str, str]:
-        """
-        Analyze template file and return variables that would be substituted.
-        
-        Args:
-            file_path: Path to template file
-            
-        Returns:
-            Dictionary of variables found in template with their resolved values
-        """
-        file_path = Path(file_path)
-        
-        if not file_path.exists():
-            raise ValueError(f"Template file not found: {file_path}")
-        
-        # Read template content
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-        except Exception as e:
-            raise ValueError(f"Failed to read template file {file_path}: {e}")
-        
-        # Find all variable references
-        pattern = r'\$\{([A-Za-z_][A-Za-z0-9_]*)(?::(-[^}]*))?\}'
-        matches = re.findall(pattern, content)
-        
-        found_variables = {}
-        
-        for var_name, default_value in matches:
-            # Remove leading dash from default value if present
-            if default_value and default_value.startswith('-'):
-                default_value = default_value[1:]
-            
-            if var_name in self.variables:
-                found_variables[var_name] = self.variables[var_name]
-            elif default_value:
-                found_variables[var_name] = f"(default: {default_value})"
-            else:
-                found_variables[var_name] = "(UNDEFINED)"
-        
-        return found_variables
-    
-    def get_all_variables(self) -> Dict[str, str]:
-        """Get all available variables and their values."""
+    def get_variables(self) -> Dict[str, str]:
+        """Get all available template variables."""
         return self.variables.copy()
     
-    def validate_template(self, file_path: str) -> List[str]:
+    def list_missing_variables(self, template_content: str) -> List[str]:
         """
-        Validate template file and return list of issues.
+        Analyze template content and return list of undefined variables.
         
         Args:
-            file_path: Path to template file
+            template_content: Jinja2 template content to analyze
             
         Returns:
-            List of validation errors/warnings
+            List of variable names that are referenced but not defined
         """
-        issues = []
-        
         try:
-            dry_run_result = self.dry_run(file_path)
+            template = self.jinja_env.from_string(template_content)
+            # Get all variables referenced in the template
+            referenced_vars = template.environment.get_template(template.name or '<string>').module.__dict__.get('variables', [])
             
-            for var_name, value in dry_run_result.items():
-                if value == "(UNDEFINED)":
-                    issues.append(f"Undefined variable: ${{{var_name}}}")
-                elif value.startswith("(default:"):
-                    issues.append(f"Using default value for: ${{{var_name}}} -> {value}")
-        
-        except Exception as e:
-            issues.append(f"Template validation failed: {e}")
-        
-        return issues
+            # Find variables that aren't in our variable map
+            missing = [var for var in referenced_vars if var not in self.variables]
+            return missing
+        except Exception:
+            # If we can't parse the template, return empty list
+            return []
+    
+    def process_template(self, template_path: str) -> str:
+        """
+        Process template file and return substituted content.
+        Compatible with old API for backward compatibility.
+        """
+        return self.process_file(template_path)
 
 
 def create_temp_processed_file(template_path: str, substitutor: VariableSubstitutor, suffix: str = ".processed") -> str:
     """
-    Create a temporary processed version of a template file.
+    Create a temporary file with processed template content.
     
     Args:
-        template_path: Path to the template file
-        substitutor: VariableSubstitutor instance
-        suffix: Suffix to add to temporary file name
+        template_path: Path to template file
+        substitutor: VariableSubstitutor instance to use
+        suffix: Suffix for temp file name
         
     Returns:
-        Path to the temporary processed file
+        Path to temporary processed file
     """
-    template_path = Path(template_path)
-    temp_path = template_path.with_suffix(template_path.suffix + suffix)
+    processed_content = substitutor.process_template(template_path)
     
-    # Process the template
-    processed_content = substitutor.process_file(str(template_path))
+    # Create temporary file
+    temp_fd, temp_path = tempfile.mkstemp(suffix=suffix, text=True)
     
-    # Write to temporary file
-    with open(temp_path, 'w', encoding='utf-8') as f:
-        f.write(processed_content)
+    try:
+        with os.fdopen(temp_fd, 'w', encoding='utf-8') as f:
+            f.write(processed_content)
+    except Exception:
+        # Clean up if writing fails
+        os.close(temp_fd)
+        os.unlink(temp_path)
+        raise
     
     logger.debug(f"Created temporary processed file: {temp_path}")
-    return str(temp_path)
+    return temp_path
 
 
-def cleanup_temp_file(file_path: str) -> None:
-    """Clean up a temporary processed file."""
+def cleanup_temp_file(temp_path: str) -> None:
+    """
+    Clean up temporary processed file.
+    
+    Args:
+        temp_path: Path to temporary file to remove
+    """
     try:
-        Path(file_path).unlink()
-        logger.debug(f"Cleaned up temporary file: {file_path}")
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+            logger.debug(f"Cleaned up temporary file: {temp_path}")
     except Exception as e:
-        logger.warning(f"Failed to clean up temporary file {file_path}: {e}")
+        logger.warning(f"Failed to cleanup temporary file {temp_path}: {e}")
