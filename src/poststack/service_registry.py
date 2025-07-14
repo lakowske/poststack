@@ -210,6 +210,10 @@ class ServiceRegistry:
         if name in ['postgres', 'volume-setup']:
             return 'bridge'
         
+        # Fail2ban should always use host networking for iptables access
+        if name == 'fail2ban':
+            return 'host'
+        
         # Check general network mode setting for other services
         network_mode = variables.get('NETWORK_MODE', '').lower()
         if network_mode == 'host':

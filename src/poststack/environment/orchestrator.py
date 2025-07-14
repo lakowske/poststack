@@ -573,6 +573,10 @@ class EnvironmentOrchestrator:
         if deployment.name in ['postgres', 'volume-setup']:
             return False
         
+        # Fail2ban should always use host networking for iptables access
+        if deployment.name == 'fail2ban':
+            return True
+        
         # Check for general network mode setting for other services
         network_mode = variables.get('NETWORK_MODE', '').lower()
         return network_mode == 'host'
