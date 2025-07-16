@@ -133,7 +133,7 @@ class TestCLICommands:
         # Run verify command
         result = cli_runner.run_command("db", ["verify-migrations"])
         assert result.exit_code == 0, f"Verify command should succeed: {result.error}"
-        assert "valid" in result.output.lower() or "verification passed" in result.output.lower(), "Should show verification success"
+        assert "verified successfully" in result.output.lower() or "valid" in result.output.lower(), "Should show verification success"
         
         logger.info("Verify command test passed")
     
