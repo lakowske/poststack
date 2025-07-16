@@ -277,15 +277,15 @@ def add_enhanced_commands(database_group: click.Group) -> None:
                     click.echo(f"    Found {len(migrations)} migration(s)")
                     
                     for migration in migrations:
-                        if not migration.file_path.exists():
-                            errors.append(f"Migration file missing: {migration.file_path}")
-                        elif not migration.file_path.is_file():
-                            errors.append(f"Migration path is not a file: {migration.file_path}")
+                        if not migration.migration_file.exists():
+                            errors.append(f"Migration file missing: {migration.migration_file}")
+                        elif not migration.migration_file.is_file():
+                            errors.append(f"Migration path is not a file: {migration.migration_file}")
                         else:
                             try:
-                                migration.file_path.read_text()
+                                migration.migration_file.read_text()
                             except Exception as e:
-                                errors.append(f"Migration file not readable: {migration.file_path} - {e}")
+                                errors.append(f"Migration file not readable: {migration.migration_file} - {e}")
                                 
                 except Exception as e:
                     errors.append(f"Failed to discover migrations: {e}")
@@ -598,12 +598,12 @@ def _output_json_migration_info(migration, status) -> None:
     output = {
         "version": migration.version,
         "name": migration.name,
-        "description": migration.description,
-        "file_path": str(migration.file_path),
+        "description": migration.get_description(),
+        "file_path": str(migration.migration_file),
         "rollback_file": str(migration.rollback_file) if migration.rollback_file else None,
         "checksum": migration.checksum,
         "is_applied": is_applied,
-        "file_size": migration.file_path.stat().st_size if migration.file_path.exists() else 0,
+        "file_size": migration.migration_file.stat().st_size if migration.migration_file.exists() else 0,
         "has_rollback": migration.rollback_file is not None
     }
     
@@ -617,12 +617,12 @@ def _output_text_migration_info(migration, status) -> None:
     click.echo(f"Migration Information: {migration.version}")
     click.echo("=" * 50)
     click.echo(f"Name: {migration.name}")
-    click.echo(f"Description: {migration.description}")
-    click.echo(f"File: {migration.file_path}")
+    click.echo(f"Description: {migration.get_description()}")
+    click.echo(f"File: {migration.migration_file}")
     click.echo(f"Rollback File: {migration.rollback_file or 'None'}")
     click.echo(f"Checksum: {migration.checksum}")
     click.echo(f"Status: {'✅ Applied' if is_applied else '⏳ Pending'}")
-    click.echo(f"File Size: {migration.file_path.stat().st_size if migration.file_path.exists() else 0} bytes")
+    click.echo(f"File Size: {migration.migration_file.stat().st_size if migration.migration_file.exists() else 0} bytes")
     click.echo(f"Has Rollback: {'Yes' if migration.rollback_file else 'No'}")
 
 
@@ -673,8 +673,8 @@ def _output_text_all_migrations_info(migrations, status) -> None:
             rollback_icon = "🔄" if migration.rollback_file else "❌"
             
             click.echo(f"  {status_icon} {migration.version}: {migration.name}")
-            click.echo(f"      Description: {migration.description}")
-            click.echo(f"      File: {migration.file_path}")
+            click.echo(f"      Description: {migration.get_description()}")
+            click.echo(f"      File: {migration.migration_file}")
             click.echo(f"      Rollback: {rollback_icon} {migration.rollback_file or 'None'}")
-            click.echo(f"      Size: {migration.file_path.stat().st_size if migration.file_path.exists() else 0} bytes")
+            click.echo(f"      Size: {migration.migration_file.stat().st_size if migration.migration_file.exists() else 0} bytes")
             click.echo()

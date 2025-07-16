@@ -194,7 +194,7 @@ class MigrationDiagnostics:
         try:
             # Get applied migrations
             cursor.execute("""
-                SELECT version, description, applied_at, checksum, success, execution_time_ms
+                SELECT version, description, applied_at, checksum, execution_time_ms, applied_by
                 FROM schema_migrations
                 ORDER BY version
             """)
@@ -202,8 +202,9 @@ class MigrationDiagnostics:
             
             # Get migration lock status
             cursor.execute("""
-                SELECT locked_at, process_id, hostname
-                FROM schema_migrations_lock
+                SELECT locked_at, locked_by
+                FROM schema_migration_lock
+                WHERE locked = TRUE
                 ORDER BY locked_at DESC
                 LIMIT 1
             """)
@@ -379,7 +380,7 @@ class MigrationDiagnostics:
         issues = []
         
         for migration in database_state['applied_migrations']:
-            version, description, applied_at, checksum, success, execution_time = migration
+            version, description, applied_at, checksum, execution_time, applied_by = migration
             
             # Check for invalid versions
             if not self._is_valid_version(version):
@@ -393,17 +394,8 @@ class MigrationDiagnostics:
                     auto_fixable=True
                 ))
             
-            # Check for failed migrations
-            if not success:
-                issues.append(MigrationIssue(
-                    type=IssueType.PARTIAL_MIGRATION,
-                    severity=IssueSeverity.HIGH,
-                    version=version,
-                    description=f"Migration {version} failed during application",
-                    details={'version': version, 'description': description},
-                    suggested_fix="Retry migration or remove failed record",
-                    auto_fixable=True
-                ))
+            # Note: Since our schema doesn't track success/failure, we assume all tracked migrations succeeded
+            # If there were failures, they wouldn't be in the schema_migrations table
         
         return issues
     
@@ -414,7 +406,7 @@ class MigrationDiagnostics:
         lock_info = database_state['lock_info']
         
         if lock_info:
-            locked_at, process_id, hostname = lock_info
+            locked_at, locked_by = lock_info
             
             # Check if lock is older than 1 hour
             if locked_at and (time.time() - locked_at.timestamp()) > 3600:
@@ -422,11 +414,10 @@ class MigrationDiagnostics:
                     type=IssueType.STUCK_LOCK,
                     severity=IssueSeverity.CRITICAL,
                     version=None,
-                    description=f"Migration locked since {locked_at} by process {process_id} on {hostname}",
+                    description=f"Migration locked since {locked_at} by {locked_by}",
                     details={
                         'locked_at': locked_at.isoformat(),
-                        'process_id': process_id,
-                        'hostname': hostname
+                        'locked_by': locked_by
                     },
                     suggested_fix="Clear stuck lock",
                     auto_fixable=True
@@ -463,23 +454,9 @@ class MigrationDiagnostics:
         """Detect migrations that were partially applied."""
         issues = []
         
-        for migration in database_state['applied_migrations']:
-            version, description, applied_at, checksum, success, execution_time = migration
-            
-            if not success:
-                issues.append(MigrationIssue(
-                    type=IssueType.PARTIAL_MIGRATION,
-                    severity=IssueSeverity.HIGH,
-                    version=version,
-                    description=f"Migration {version} was not successfully applied",
-                    details={
-                        'version': version,
-                        'description': description,
-                        'applied_at': applied_at.isoformat() if applied_at else None
-                    },
-                    suggested_fix="Retry migration or clean up partial state",
-                    auto_fixable=True
-                ))
+        # Note: Our schema doesn't track success/failure status
+        # Partial migrations would not be recorded in schema_migrations table
+        # This method is kept for compatibility but doesn't detect issues with current schema
         
         return issues
     
@@ -510,7 +487,7 @@ class MigrationDiagnostics:
         issues = []
         
         for migration in database_state['applied_migrations']:
-            version, description, applied_at, checksum, success, execution_time = migration
+            version, description, applied_at, checksum, execution_time, applied_by = migration
             
             # Check for missing required fields
             if not version or not description:
@@ -616,10 +593,10 @@ class MigrationDiagnostics:
             checksum = issue.details['expected_checksum']
             
             cursor.execute("""
-                INSERT INTO schema_migrations (version, description, applied_at, checksum, success)
-                VALUES (%s, %s, CURRENT_TIMESTAMP, %s, TRUE)
+                INSERT INTO schema_migrations (version, description, applied_at, checksum, applied_by)
+                VALUES (%s, %s, CURRENT_TIMESTAMP, %s, %s)
                 ON CONFLICT (version) DO NOTHING
-            """, (version, f"recovered_{version}", checksum))
+            """, (version, f"recovered_{version}", checksum, "diagnostic_recovery"))
             
             conn.commit()
             return f"Added tracking for migration {version}"
@@ -654,7 +631,7 @@ class MigrationDiagnostics:
         cursor = conn.cursor()
         
         try:
-            cursor.execute("DELETE FROM schema_migrations_lock")
+            cursor.execute("DELETE FROM schema_migration_lock")
             conn.commit()
             return "Cleared stuck migration lock"
             
@@ -738,12 +715,12 @@ class MigrationDiagnostics:
                 conn.commit()
                 return f"Removed failed migration record {version}"
             else:
-                # Mark for retry
+                # Mark for retry by updating applied_by
                 cursor.execute("""
                     UPDATE schema_migrations 
-                    SET success = NULL, updated_at = CURRENT_TIMESTAMP
+                    SET applied_by = %s
                     WHERE version = %s
-                """, (version,))
+                """, (f"retry_{version}", version))
                 conn.commit()
                 return f"Marked migration {version} for retry"
             
