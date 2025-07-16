@@ -57,3 +57,23 @@ This approach ensures:
 - Proper integration with poststack's configuration and state management
 - Better error handling and logging
 - Centralized resource management
+
+## Working Directory Context for Claude Code
+
+**⚠️ Important for Claude Code Sessions:**
+- This project is frequently edited and executed by Claude Code assistants
+- Claude Code maintains persistent working directory state across tool calls
+- Commands may execute from different directories depending on session history
+- **Always verify your current working directory** before running context-dependent commands
+
+**Best Practices:**
+- Use `pwd` to check current working directory when troubleshooting
+- Use absolute paths for critical operations: `/home/seth/Software/dev/poststack/`
+- Be explicit about directory context when running poststack commands
+- Remember that `cd` commands in Claude Code **do** persist across tool calls (unlike normal subshells)
+- When working with both poststack and unified projects, be extra careful about current directory
+
+**Common Directory Issues:**
+- Poststack commands should be run from `/home/seth/Software/dev/poststack/` (or use absolute paths)
+- Project commands should be run from project root directories (e.g., `/home/seth/Software/dev/unified/`)
+- Always check `pwd` if commands fail unexpectedly or if file paths seem incorrect

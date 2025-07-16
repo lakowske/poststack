@@ -15,6 +15,7 @@ import click
 from .config import PoststackConfig
 from .schema_management import SchemaManager
 from .database_operations import DatabaseManager
+from .cli_enhanced import add_enhanced_commands
 
 logger = logging.getLogger(__name__)
 
@@ -838,3 +839,7 @@ def unlock_migrations(ctx: click.Context, confirm: bool) -> None:
     except Exception as e:
         click.echo(f"❌ Unlock failed: {e}", err=True)
         sys.exit(1)
+
+
+# Add enhanced migration commands
+add_enhanced_commands(database)

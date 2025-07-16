@@ -543,7 +543,15 @@ class EnvironmentOrchestrator:
         
         # Add service discovery variables for this deployment's dependencies
         if hasattr(deployment, 'depends_on') and deployment.depends_on:
-            service_vars = base_substitutor.service_registry.generate_service_variables(deployment.name, deployment.depends_on)
+            # Detect target service networking mode for proper endpoint selection
+            target_service_info = base_substitutor.service_registry.services.get(deployment.name)
+            target_networking_mode = target_service_info.networking_mode if target_service_info else None
+            
+            service_vars = base_substitutor.service_registry.generate_service_variables(
+                deployment.name, 
+                deployment.depends_on, 
+                target_networking_mode
+            )
             deployment_variables.update(service_vars)
         
         # Create new substitutor instance with merged variables (using dict constructor)
