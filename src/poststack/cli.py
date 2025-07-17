@@ -6,7 +6,7 @@ Provides a unified CLI for environment management, database operations, and buil
 
 import sys
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 
 import click
 
@@ -204,26 +204,87 @@ def env(ctx: click.Context) -> None:
 
 
 @env.command("list")
+@click.option("--all", is_flag=True, help="Show all environments including copies")
 @click.pass_context
-def env_list(ctx: click.Context) -> None:
+def env_list(ctx: click.Context, all: bool) -> None:
     """List available environments."""
     config = ctx.obj["config"]
     
     try:
-        parser = EnvironmentConfigParser(config)
-        project_config = parser.load_project_config()
-        
-        current_env = project_config.environment
-        
-        click.echo(f"Available environments:")
-        for env_name in sorted(project_config.environments.keys()):
-            env_config = project_config.environments[env_name]
-            marker = "*" if env_name == current_env else " "
-            click.echo(f"  {marker} {env_name}")
+        if all:
+            # Use EnvironmentManager to show all environments including copies
+            from .environment import EnvironmentManager
             
-            # Show basic info
-            postgres = env_config.postgres
-            click.echo(f"      Database: {postgres.database} (port {postgres.port})")
+            env_manager = EnvironmentManager(config)
+            all_environments = env_manager.list_environments(include_copies=True)
+            
+            parser = EnvironmentConfigParser(config)
+            project_config = parser.load_project_config()
+            current_env = project_config.environment
+            
+            click.echo("All environments:")
+            click.echo("-" * 40)
+            
+            # Separate base and copied environments
+            base_envs = {name: info for name, info in all_environments.items() if info.get("type") == "base"}
+            copied_envs = {name: info for name, info in all_environments.items() if info.get("type") == "copy"}
+            
+            # Show base environments first
+            if base_envs:
+                click.echo("📦 Base environments:")
+                for env_name in sorted(base_envs.keys()):
+                    env_info = base_envs[env_name]
+                    marker = "*" if env_name == current_env else " "
+                    status = env_info.get("status", "unknown")
+                    click.echo(f"  {marker} {env_name} ({status})")
+                    
+                    if env_name in project_config.environments:
+                        env_config = project_config.environments[env_name]
+                        # Extract database info from variables if available
+                        db_name = env_config.variables.get("POSTGRES_DB", f"unified_{env_name}")
+                        db_port = env_config.variables.get("POSTGRES_PORT", "5432")
+                        click.echo(f"      Database: {db_name} (port {db_port})")
+            
+            # Show copied environments
+            if copied_envs:
+                click.echo("\n📋 Copied environments:")
+                for env_name in sorted(copied_envs.keys()):
+                    env_info = copied_envs[env_name]
+                    status = env_info.get("status", "unknown")
+                    parent = env_info.get("parent", "unknown")
+                    created = env_info.get("created", "")
+                    
+                    click.echo(f"   {env_name} ({status}) - copied from '{parent}'")
+                    
+                    if "ports" in env_info:
+                        postgres_port = env_info["ports"].get("postgres", "unknown")
+                        click.echo(f"      Database: unified_{env_name} (port {postgres_port})")
+                    
+                    if created:
+                        click.echo(f"      Created: {created[:19]}")  # Show date part only
+            
+            if not base_envs and not copied_envs:
+                click.echo("No environments found.")
+                
+        else:
+            # Show only base environments (original behavior)
+            parser = EnvironmentConfigParser(config)
+            project_config = parser.load_project_config()
+            
+            current_env = project_config.environment
+            
+            click.echo("Available environments:")
+            for env_name in sorted(project_config.environments.keys()):
+                env_config = project_config.environments[env_name]
+                marker = "*" if env_name == current_env else " "
+                click.echo(f"  {marker} {env_name}")
+                
+                # Show basic info
+                db_name = env_config.variables.get("POSTGRES_DB", f"unified_{env_name}")
+                db_port = env_config.variables.get("POSTGRES_PORT", "5432")
+                click.echo(f"      Database: {db_name} (port {db_port})")
+            
+            click.echo("\nTip: Use --all to see copied environments")
             
     except Exception as e:
         click.echo(f"❌ Failed to list environments: {e}", err=True)
@@ -512,6 +573,529 @@ def env_switch(ctx: click.Context, environment: str) -> None:
         
     except Exception as e:
         click.echo(f"❌ Failed to switch environment: {e}", err=True)
+        sys.exit(1)
+
+
+@env.command("copy")
+@click.argument("source")
+@click.option("--name", required=True, help="Name for the new environment copy")
+@click.pass_context
+def env_copy(ctx: click.Context, source: str, name: str) -> None:
+    """Copy an environment with isolated resources (ports, databases, containers)."""
+    config = ctx.obj["config"]
+    
+    try:
+        from .environment import EnvironmentManager
+        
+        click.echo(f"🔄 Copying environment '{source}' to '{name}'...")
+        
+        env_manager = EnvironmentManager(config)
+        success = env_manager.copy_environment(source, name)
+        
+        if success:
+            click.echo(f"✅ Environment '{name}' created successfully!")
+            click.echo(f"   Run 'poststack env start {name}' to start the new environment")
+            
+            # Show port information
+            allocated_ports = env_manager.port_allocator.get_environment_ports(name)
+            if allocated_ports:
+                click.echo(f"\n📊 Allocated ports for '{name}':")
+                for service, port in sorted(allocated_ports.items()):
+                    click.echo(f"   {service}: {port}")
+        else:
+            click.echo(f"❌ Failed to copy environment")
+            sys.exit(1)
+            
+    except ValueError as e:
+        click.echo(f"❌ {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"❌ Failed to copy environment: {e}", err=True)
+        sys.exit(1)
+
+
+@env.command("remove")
+@click.argument("environment")
+@click.option("--force", is_flag=True, help="Force removal even if environment is running")
+@click.pass_context
+def env_remove(ctx: click.Context, environment: str, force: bool) -> None:
+    """Remove an environment and all its resources (containers, volumes, databases)."""
+    config = ctx.obj["config"]
+    
+    # Skip confirmation if force flag is used
+    if not force:
+        if not click.confirm("Are you sure you want to remove this environment?"):
+            ctx.abort()
+    
+    # Prevent removal of base environments
+    base_environments = ["dev", "staging", "production"]
+    if environment in base_environments:
+        click.echo(f"❌ Cannot remove base environment '{environment}'")
+        click.echo(f"   Base environments ({', '.join(base_environments)}) are protected")
+        sys.exit(1)
+    
+    try:
+        from .environment import EnvironmentManager
+        
+        click.echo(f"🗑️ Removing environment '{environment}'...")
+        
+        env_manager = EnvironmentManager(config)
+        success = env_manager.remove_environment(environment, force=force)
+        
+        if success:
+            click.echo(f"✅ Environment '{environment}' removed successfully!")
+        else:
+            click.echo(f"❌ Failed to remove environment")
+            sys.exit(1)
+            
+    except Exception as e:
+        click.echo(f"❌ Failed to remove environment: {e}", err=True)
+        sys.exit(1)
+
+
+@env.command("start-service")
+@click.argument("environment", required=False)
+@click.argument("services", nargs=-1, required=True)
+@click.option("--wait", is_flag=True, help="Wait for services to become ready")
+@click.option("--timeout", type=int, default=60, help="Timeout in seconds for service readiness")
+@click.option("--dependencies", is_flag=True, help="Start dependencies first")
+@click.pass_context
+def env_start_service(ctx: click.Context, environment: Optional[str], services: Tuple[str], wait: bool, timeout: int, dependencies: bool) -> None:
+    """Start one or more services in an environment.
+    
+    Examples:
+        poststack env start-service postgres
+        poststack env start-service postgres apache mail
+        poststack env start-service --dependencies apache
+        poststack env start-service dev postgres apache --wait
+    """
+    config = ctx.obj["config"]
+    
+    try:
+        parser = EnvironmentConfigParser(config)
+        project_config = parser.load_project_config()
+        
+        # Use current environment if not specified
+        if not environment:
+            environment = project_config.environment
+            click.echo(f"Using current environment: {environment}")
+        
+        # Get environment configuration
+        env_config = project_config.environments.get(environment)
+        if not env_config:
+            click.echo(f"❌ Environment '{environment}' not found")
+            sys.exit(1)
+        
+        # Build deployment map for easy lookup
+        deployments_map = {d.name: d for d in env_config.deployments}
+        available_services = list(deployments_map.keys())
+        
+        # Validate all requested services exist
+        invalid_services = [s for s in services if s not in deployments_map]
+        if invalid_services:
+            click.echo(f"❌ Unknown services: {', '.join(invalid_services)}")
+            click.echo(f"Available services: {', '.join(available_services)}")
+            sys.exit(1)
+        
+        # Resolve dependencies if requested
+        services_to_start = list(services)
+        if dependencies:
+            services_to_start = _resolve_service_dependencies(services_to_start, deployments_map)
+            click.echo(f"📋 Services to start (with dependencies): {', '.join(services_to_start)}")
+        else:
+            click.echo(f"📋 Services to start: {', '.join(services_to_start)}")
+        
+        # Start services
+        failed_services = []
+        started_services = []
+        
+        for service_name in services_to_start:
+            click.echo(f"\n🚀 Starting service '{service_name}'...")
+            
+            try:
+                # For now, use direct container start instead of orchestrator
+                # until we implement deploy_single_service
+                success = _start_service_direct(environment, service_name, deployments_map[service_name], env_config)
+                
+                if success:
+                    click.echo(f"✅ Service '{service_name}' started successfully")
+                    started_services.append(service_name)
+                    
+                    # Wait for readiness if requested
+                    if wait and service_name == "postgres":
+                        click.echo(f"⏳ Waiting for PostgreSQL to become ready...")
+                        ready = _wait_for_postgres_ready(environment, timeout)
+                        if ready:
+                            click.echo(f"✅ PostgreSQL is ready!")
+                        else:
+                            click.echo(f"⚠️ PostgreSQL started but readiness check timed out")
+                else:
+                    click.echo(f"❌ Failed to start service '{service_name}'")
+                    failed_services.append(service_name)
+                    
+            except Exception as e:
+                click.echo(f"❌ Failed to start service '{service_name}': {e}")
+                failed_services.append(service_name)
+        
+        # Summary
+        click.echo(f"\n📊 Service startup summary:")
+        click.echo(f"✅ Started: {len(started_services)} services")
+        if started_services:
+            click.echo(f"   - {', '.join(started_services)}")
+        
+        if failed_services:
+            click.echo(f"❌ Failed: {len(failed_services)} services")
+            click.echo(f"   - {', '.join(failed_services)}")
+            sys.exit(1)
+            
+    except Exception as e:
+        click.echo(f"❌ Failed to start services: {e}", err=True)
+        sys.exit(1)
+
+
+def _resolve_service_dependencies(services: List[str], deployments_map: Dict) -> List[str]:
+    """Resolve service dependencies and return ordered list."""
+    resolved = []
+    processed = set()
+    
+    def add_service_with_deps(service_name: str):
+        if service_name in processed:
+            return
+        
+        deployment = deployments_map.get(service_name)
+        if not deployment:
+            return
+            
+        # Add dependencies first
+        for dep in getattr(deployment, 'depends_on', []):
+            add_service_with_deps(dep)
+        
+        # Add this service
+        if service_name not in resolved:
+            resolved.append(service_name)
+        processed.add(service_name)
+    
+    # Process all requested services
+    for service in services:
+        add_service_with_deps(service)
+    
+    return resolved
+
+
+def _start_service_direct(environment: str, service_name: str, deployment, env_config) -> bool:
+    """Start a service directly using podman play kube."""
+    try:
+        import subprocess
+        from .environment.substitution import VariableSubstitutor
+        
+        # Create variable substitutor
+        # Merge environment and deployment variables
+        all_variables = env_config.variables.copy()
+        all_variables.update(deployment.variables)
+        
+        substitutor = VariableSubstitutor(
+            all_variables,
+            environment_config=env_config
+        )
+        
+        # Process the pod template
+        pod_template = deployment.pod
+        processed_pod = substitutor.process_file(pod_template)
+        
+        # Create temporary file
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            f.write(processed_pod)
+            temp_pod_file = f.name
+        
+        try:
+            # Start the service
+            cmd = ["podman", "play", "kube", temp_pod_file]
+            
+            # Add network if environment has one
+            network_name = f"unified-{environment}"
+            cmd.extend(["--network", network_name])
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            
+            return result.returncode == 0
+            
+        finally:
+            # Clean up temp file
+            import os
+            try:
+                os.unlink(temp_pod_file)
+            except:
+                pass
+            
+    except Exception as e:
+        click.echo(f"Error starting service directly: {e}")
+        return False
+
+
+def _wait_for_postgres_ready(environment: str, timeout: int = 60) -> bool:
+    """Wait for PostgreSQL to become ready."""
+    try:
+        import subprocess
+        import time
+        
+        container_name = f"unified-postgres-{environment}"
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            result = subprocess.run(
+                ["podman", "exec", container_name, "pg_isready"],
+                capture_output=True,
+                timeout=5
+            )
+            
+            if result.returncode == 0:
+                return True
+                
+            time.sleep(2)
+        
+        return False
+        
+    except Exception:
+        return False
+
+
+@env.command("stop-service")
+@click.argument("environment", required=False)
+@click.argument("services", nargs=-1, required=True)
+@click.option("--remove", is_flag=True, help="Remove containers after stopping")
+@click.pass_context
+def env_stop_service(ctx: click.Context, environment: Optional[str], services: Tuple[str], remove: bool) -> None:
+    """Stop one or more services in an environment.
+    
+    Examples:
+        poststack env stop-service postgres
+        poststack env stop-service postgres apache mail
+        poststack env stop-service dev postgres --remove
+    """
+    config = ctx.obj["config"]
+    
+    try:
+        parser = EnvironmentConfigParser(config)
+        project_config = parser.load_project_config()
+        
+        # Use current environment if not specified
+        if not environment:
+            environment = project_config.environment
+            click.echo(f"Using current environment: {environment}")
+        
+        click.echo(f"🛑 Stopping {len(services)} service(s) in environment '{environment}'...")
+        click.echo(f"📋 Services to stop: {', '.join(services)}")
+        
+        import subprocess
+        
+        stopped_services = []
+        failed_services = []
+        
+        # Get actual container names first
+        container_result = subprocess.run(
+            ["podman", "ps", "-a", "--format", "{{.Names}}", "--filter", f"name=unified-.*-{environment}-"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        available_containers = {}
+        if container_result.returncode == 0 and container_result.stdout.strip():
+            for container_name in container_result.stdout.strip().split('\n'):
+                parts = container_name.split('-')
+                if len(parts) >= 4 and parts[0] == 'unified' and environment in parts:
+                    env_index = parts.index(environment)
+                    if env_index >= 2:
+                        svc_name = '-'.join(parts[1:env_index])
+                        available_containers[svc_name] = container_name
+        
+        for service_name in services:
+            click.echo(f"\n🛑 Stopping service '{service_name}'...")
+            
+            # Find actual container name
+            container_name = available_containers.get(service_name)
+            if not container_name:
+                click.echo(f"ℹ️ Service '{service_name}' is not running")
+                stopped_services.append(service_name)
+                continue
+            
+            # Stop the container
+            result = subprocess.run(
+                ["podman", "stop", container_name],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            if result.returncode == 0:
+                click.echo(f"✅ Service '{service_name}' stopped successfully")
+                stopped_services.append(service_name)
+                
+                # Remove container if requested
+                if remove:
+                    result = subprocess.run(
+                        ["podman", "rm", container_name],
+                        capture_output=True,
+                        text=True,
+                        timeout=10
+                    )
+                    
+                    if result.returncode == 0:
+                        click.echo(f"✅ Service '{service_name}' container removed")
+                    else:
+                        click.echo(f"⚠️ Failed to remove container: {result.stderr}")
+            else:
+                if "no such container" in result.stderr.lower():
+                    click.echo(f"ℹ️ Service '{service_name}' is not running")
+                    stopped_services.append(service_name)  # Count as "stopped"
+                else:
+                    click.echo(f"❌ Failed to stop service '{service_name}': {result.stderr}")
+                    failed_services.append(service_name)
+        
+        # Summary
+        click.echo(f"\n📊 Service stop summary:")
+        click.echo(f"✅ Stopped: {len(stopped_services)} services")
+        if stopped_services:
+            click.echo(f"   - {', '.join(stopped_services)}")
+        
+        if failed_services:
+            click.echo(f"❌ Failed: {len(failed_services)} services")
+            click.echo(f"   - {', '.join(failed_services)}")
+            sys.exit(1)
+            
+    except Exception as e:
+        click.echo(f"❌ Failed to stop services: {e}", err=True)
+        sys.exit(1)
+
+
+@env.command("service-status")
+@click.argument("environment", required=False)
+@click.argument("service", required=False)
+@click.pass_context
+def env_service_status(ctx: click.Context, environment: Optional[str], service: Optional[str]) -> None:
+    """Show status of services in an environment."""
+    config = ctx.obj["config"]
+    
+    try:
+        parser = EnvironmentConfigParser(config)
+        project_config = parser.load_project_config()
+        
+        # Use current environment if not specified
+        if not environment:
+            environment = project_config.environment
+            click.echo(f"Environment: {environment}")
+        
+        # Get environment configuration
+        env_config = project_config.environments.get(environment)
+        if not env_config:
+            click.echo(f"❌ Environment '{environment}' not found")
+            sys.exit(1)
+        
+        # Get container status
+        import subprocess
+        result = subprocess.run(
+            ["podman", "ps", "-a", "--format", "json", "--filter", f"name=unified-.*-{environment}-"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if result.returncode == 0:
+            import json
+            containers = json.loads(result.stdout) if result.stdout.strip() else []
+            
+            # Create status map
+            status_map = {}
+            for container in containers:
+                names = container.get('Names', [])
+                if names:
+                    name = names[0]
+                    # Extract service name from container name: unified-SERVICE-ENVIRONMENT-TYPE
+                    parts = name.split('-')
+                    if len(parts) >= 4 and parts[0] == 'unified':
+                        # Find environment position by looking for it in the name
+                        if environment in parts:
+                            env_index = parts.index(environment)
+                            if env_index >= 2:  # Must have unified- and service name before environment
+                                svc_name = '-'.join(parts[1:env_index])  # Service name between 'unified' and environment
+                                status_map[svc_name] = {
+                                    'state': container.get('State', 'unknown'),
+                                    'status': container.get('Status', 'unknown'),
+                                    'created': container.get('CreatedAt', 'unknown')
+                                }
+            
+            # Show status
+            click.echo(f"\n📊 Service Status for '{environment}':")
+            click.echo("=" * 50)
+            
+            services_to_show = [service] if service else [d.name for d in env_config.deployments]
+            
+            for svc in services_to_show:
+                if svc in status_map:
+                    info = status_map[svc]
+                    state_icon = "🟢" if info['state'] == 'running' else "🔴" if info['state'] == 'exited' else "🟡"
+                    click.echo(f"{state_icon} {svc}: {info['state']} ({info['status']})")
+                else:
+                    click.echo(f"⚪ {svc}: not found")
+            
+            if not service:
+                running_count = sum(1 for info in status_map.values() if info['state'] == 'running')
+                total_services = len(env_config.deployments)
+                click.echo(f"\n📈 Summary: {running_count}/{total_services} services running")
+        else:
+            click.echo(f"❌ Failed to get container status: {result.stderr}")
+            sys.exit(1)
+            
+    except Exception as e:
+        click.echo(f"❌ Failed to get service status: {e}", err=True)
+        sys.exit(1)
+
+
+@env.command("restart-service")
+@click.argument("environment", required=False)
+@click.argument("services", nargs=-1, required=True)
+@click.option("--wait", is_flag=True, help="Wait for services to become ready")
+@click.option("--timeout", type=int, default=60, help="Timeout in seconds for service readiness")
+@click.option("--dependencies", is_flag=True, help="Restart dependencies first")
+@click.pass_context
+def env_restart_service(ctx: click.Context, environment: Optional[str], services: Tuple[str], wait: bool, timeout: int, dependencies: bool) -> None:
+    """Restart one or more services in an environment.
+    
+    Examples:
+        poststack env restart-service postgres
+        poststack env restart-service postgres apache mail
+        poststack env restart-service --dependencies apache --wait
+    """
+    config = ctx.obj["config"]
+    
+    try:
+        parser = EnvironmentConfigParser(config)
+        project_config = parser.load_project_config()
+        
+        # Use current environment if not specified
+        if not environment:
+            environment = project_config.environment
+            click.echo(f"Using current environment: {environment}")
+        
+        click.echo(f"🔄 Restarting {len(services)} service(s) in environment '{environment}'...")
+        click.echo(f"📋 Services to restart: {', '.join(services)}")
+        
+        # Stop the services first
+        ctx.invoke(env_stop_service, environment=environment, services=services, remove=True)
+        
+        # Start the services
+        ctx.invoke(env_start_service, environment=environment, services=services, wait=wait, timeout=timeout, dependencies=dependencies)
+        
+        click.echo(f"✅ Services restarted successfully")
+        
+    except Exception as e:
+        click.echo(f"❌ Failed to restart services: {e}", err=True)
         sys.exit(1)
 
 

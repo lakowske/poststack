@@ -397,6 +397,11 @@ class PoststackConfig(BaseSettings):
         """Get log directory as Path object."""
         return Path(self.log_dir)
 
+    @property
+    def project_root(self) -> Path:
+        """Get project root directory as Path object."""
+        return Path.cwd()
+
 
     def create_directories(self) -> None:
         """Create necessary directories if they don't exist."""
@@ -448,6 +453,25 @@ class PoststackConfig(BaseSettings):
     def has_project_config(self) -> bool:
         """Check if a project configuration file exists."""
         return Path(self.project_config_file).exists()
+    
+    def save_project_config(self, project_config: PoststackProjectConfig) -> None:
+        """Save project configuration to .poststack.yml file."""
+        config_path = Path(self.project_config_file)
+        
+        try:
+            import yaml
+            
+            # Convert the project config to dict for YAML serialization
+            config_data = project_config.model_dump(exclude_unset=True)
+            
+            with open(config_path, 'w') as f:
+                yaml.safe_dump(config_data, f, default_flow_style=False, sort_keys=True)
+            
+            logger.info(f"Saved project config to {config_path}")
+            
+        except Exception as e:
+            logger.error(f"Failed to save project config to {config_path}: {e}")
+            raise ValueError(f"Failed to save project configuration: {e}")
 
     @classmethod
     def from_cli_args(
