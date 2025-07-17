@@ -291,6 +291,7 @@ class PoststackConfig(BaseSettings):
         logger.debug("Deployment configuration removed - use environment variables for database connection")
         return None
     
+    @property
     def effective_database_url(self) -> Optional[str]:
         """Get the effective database URL (explicit or auto-detected)."""
         if self.database_url:
