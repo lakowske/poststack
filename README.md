@@ -85,6 +85,11 @@ pip install poststack
 - `info <volume>` - Show volume details
 - `prune` - Remove unused volumes
 
+### Shell Completion (`poststack completion`)
+
+- `install` - Install shell completion for current or specified shell
+- `show` - Display completion script for manual installation
+
 ## Migration Files
 
 Poststack uses SQL-based migration files with the following structure:
@@ -118,6 +123,23 @@ CREATE TABLE myapp.users (
 DROP TABLE IF EXISTS myapp.users;
 DROP SCHEMA IF EXISTS myapp CASCADE;
 ```
+
+## Shell Completion
+
+Poststack supports tab-completion for bash, zsh, and fish shells:
+
+```bash
+# Install completion for your current shell (auto-detected)
+poststack completion install
+
+# Install for specific shell
+poststack completion install --shell bash
+
+# Show completion script for manual installation
+poststack completion show --shell bash
+```
+
+For more details, see [docs/shell-completion.md](docs/shell-completion.md).
 
 ## Configuration
 

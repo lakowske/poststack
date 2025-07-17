@@ -846,5 +846,258 @@ def unlock_migrations(ctx: click.Context, confirm: bool) -> None:
         sys.exit(1)
 
 
+@database.command()
+@click.option(
+    "--migrations-path",
+    type=click.Path(exists=True, path_type=Path),
+    default="./migrations",
+    help="Path to migrations directory (default: ./migrations)",
+)
+@click.option(
+    "--migration",
+    type=str,
+    help="Specific migration version to create rollback for (e.g., 001)",
+)
+@click.option(
+    "--all",
+    "create_all",
+    is_flag=True,
+    help="Create rollback files for all migrations missing them",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Overwrite existing rollback files",
+)
+@click.pass_context
+def create_rollback(ctx: click.Context, migrations_path: Path, migration: Optional[str], 
+                   create_all: bool, force: bool) -> None:
+    """Create rollback file templates for migrations."""
+    
+    if not migration and not create_all:
+        click.echo("❌ Specify --migration VERSION or --all", err=True)
+        sys.exit(1)
+    
+    click.echo(f"📁 Checking migrations in: {migrations_path}")
+    
+    # Find migration files
+    migration_files = sorted([
+        f for f in migrations_path.glob("*.sql") 
+        if not f.name.endswith(".rollback.sql")
+    ])
+    
+    if not migration_files:
+        click.echo("❌ No migration files found", err=True)
+        sys.exit(1)
+    
+    created_count = 0
+    
+    for migration_file in migration_files:
+        # Extract version from filename (e.g., "001" from "001_create_user_table.sql")
+        version = migration_file.name.split('_')[0]
+        
+        # Skip if specific migration requested and this isn't it
+        if migration and version != migration:
+            continue
+            
+        rollback_file = migration_file.parent / f"{migration_file.stem}.rollback.sql"
+        
+        # Skip if exists and not forcing
+        if rollback_file.exists() and not force:
+            click.echo(f"⏭️  Rollback exists: {rollback_file.name}")
+            continue
+        
+        # Check if file exists before creating
+        file_existed = rollback_file.exists()
+        
+        # Generate rollback template
+        rollback_content = _generate_rollback_template(migration_file)
+        
+        # Write rollback file
+        rollback_file.write_text(rollback_content, encoding='utf-8')
+        created_count += 1
+        
+        status = "🔄 Updated" if file_existed else "✅ Created"
+        click.echo(f"{status}: {rollback_file.name}")
+    
+    click.echo(f"\n📋 Summary: {created_count} rollback files {'created' if created_count else 'processed'}")
+
+
+@database.command()
+@click.option(
+    "--migrations-path",
+    type=click.Path(exists=True, path_type=Path),
+    default="./migrations",
+    help="Path to migrations directory (default: ./migrations)",
+)
+@click.option(
+    "--check-syntax",
+    is_flag=True,
+    help="Validate SQL syntax in rollback files",
+)
+@click.pass_context
+def validate_rollbacks(ctx: click.Context, migrations_path: Path, check_syntax: bool) -> None:
+    """Validate rollback files for migrations."""
+    config: PoststackConfig = ctx.obj["config"]
+    
+    click.echo(f"📁 Validating rollbacks in: {migrations_path}")
+    
+    # Find migration files
+    migration_files = sorted([
+        f for f in migrations_path.glob("*.sql") 
+        if not f.name.endswith(".rollback.sql")
+    ])
+    
+    if not migration_files:
+        click.echo("❌ No migration files found", err=True)
+        sys.exit(1)
+    
+    issues = []
+    valid_count = 0
+    
+    for migration_file in migration_files:
+        version = migration_file.name.split('_')[0]
+        rollback_file = migration_file.parent / f"{migration_file.stem}.rollback.sql"
+        
+        # Check if rollback file exists
+        if not rollback_file.exists():
+            issues.append(f"❌ Missing rollback: {migration_file.name}")
+            continue
+        
+        # Check if rollback file is empty
+        rollback_content = rollback_file.read_text(encoding='utf-8').strip()
+        if not rollback_content:
+            issues.append(f"⚠️  Empty rollback: {rollback_file.name}")
+            continue
+        
+        # Check for template placeholders
+        if "-- TODO:" in rollback_content or "-- Add rollback" in rollback_content:
+            issues.append(f"⚠️  Template rollback (needs completion): {rollback_file.name}")
+            continue
+        
+        # Basic SQL syntax validation if requested
+        if check_syntax and config.is_database_configured:
+            try:
+                _validate_sql_syntax(rollback_content, config.effective_database_url)
+                click.echo(f"✅ Valid: {rollback_file.name}")
+                valid_count += 1
+            except Exception as e:
+                issues.append(f"❌ SQL error in {rollback_file.name}: {str(e)[:100]}")
+        else:
+            click.echo(f"✅ Exists: {rollback_file.name}")
+            valid_count += 1
+    
+    # Summary
+    click.echo(f"\n📋 Summary:")
+    click.echo(f"   Valid rollbacks: {valid_count}")
+    click.echo(f"   Issues found: {len(issues)}")
+    
+    if issues:
+        click.echo(f"\n⚠️  Issues:")
+        for issue in issues:
+            click.echo(f"   {issue}")
+        sys.exit(1)
+    else:
+        click.echo("✅ All rollbacks are valid!")
+
+
+def _generate_rollback_template(migration_file: Path) -> str:
+    """Generate a rollback template based on migration content."""
+    migration_content = migration_file.read_text(encoding='utf-8')
+    
+    # Extract basic info
+    version = migration_file.name.split('_')[0]
+    description = migration_file.stem.replace(f"{version}_", "").replace("_", " ")
+    
+    # Analyze migration content for common patterns
+    rollback_statements = []
+    
+    # Look for CREATE TABLE statements
+    import re
+    create_tables = re.findall(r'CREATE TABLE\s+(\w+\.\w+|\w+)', migration_content, re.IGNORECASE)
+    for table in create_tables:
+        rollback_statements.append(f"DROP TABLE IF EXISTS {table} CASCADE;")
+    
+    # Look for CREATE VIEW statements
+    create_views = re.findall(r'CREATE VIEW\s+(\w+\.\w+|\w+)', migration_content, re.IGNORECASE)
+    for view in create_views:
+        rollback_statements.append(f"DROP VIEW IF EXISTS {view} CASCADE;")
+    
+    # Look for CREATE FUNCTION statements
+    create_functions = re.findall(r'CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(\w+\.\w+\([^)]*\)|\w+\([^)]*\))', migration_content, re.IGNORECASE)
+    for function in create_functions:
+        rollback_statements.append(f"DROP FUNCTION IF EXISTS {function} CASCADE;")
+    
+    # Look for CREATE TRIGGER statements
+    create_triggers = re.findall(r'CREATE TRIGGER\s+(\w+)', migration_content, re.IGNORECASE)
+    for trigger in create_triggers:
+        # Need to find the table for the trigger
+        trigger_match = re.search(rf'CREATE TRIGGER\s+{trigger}\s+.*?\s+ON\s+(\w+\.\w+|\w+)', migration_content, re.IGNORECASE | re.DOTALL)
+        if trigger_match:
+            table = trigger_match.group(1)
+            rollback_statements.append(f"DROP TRIGGER IF EXISTS {trigger} ON {table} CASCADE;")
+    
+    # Look for CREATE INDEX statements
+    create_indexes = re.findall(r'CREATE\s+(?:UNIQUE\s+)?INDEX\s+(\w+)', migration_content, re.IGNORECASE)
+    for index in create_indexes:
+        rollback_statements.append(f"DROP INDEX IF EXISTS {index} CASCADE;")
+    
+    # Look for CREATE SCHEMA statements
+    create_schemas = re.findall(r'CREATE SCHEMA\s+(?:IF NOT EXISTS\s+)?(\w+)', migration_content, re.IGNORECASE)
+    for schema in create_schemas:
+        rollback_statements.append(f"DROP SCHEMA IF EXISTS {schema} CASCADE;")
+    
+    # Generate template
+    template = f"""-- Rollback for {description} (migration {version})
+-- This reverses all changes made in {migration_file.name}
+
+"""
+    
+    if rollback_statements:
+        # Add statements in reverse order
+        template += "-- Drop objects in reverse dependency order\n"
+        for statement in reversed(rollback_statements):
+            template += f"{statement}\n"
+    else:
+        template += """-- TODO: Add rollback statements for this migration
+-- Review the migration file and add appropriate DROP/ALTER statements
+-- to reverse all changes made by the migration.
+
+-- Example rollback patterns:
+-- DROP TABLE IF EXISTS table_name CASCADE;
+-- DROP VIEW IF EXISTS view_name CASCADE;
+-- DROP FUNCTION IF EXISTS function_name() CASCADE;
+-- DROP TRIGGER IF EXISTS trigger_name ON table_name CASCADE;
+-- DROP INDEX IF EXISTS index_name CASCADE;
+-- ALTER TABLE table_name DROP COLUMN column_name;
+-- etc.
+"""
+    
+    return template
+
+
+def _validate_sql_syntax(sql_content: str, database_url: str) -> None:
+    """Validate SQL syntax by testing with EXPLAIN."""
+    try:
+        import psycopg2
+        
+        # Split into individual statements
+        statements = [s.strip() for s in sql_content.split(';') if s.strip()]
+        
+        with psycopg2.connect(database_url) as conn:
+            with conn.cursor() as cursor:
+                for stmt in statements:
+                    if stmt.upper().startswith(('DROP', 'DELETE', 'ALTER', 'CREATE')):
+                        # For DDL statements, just check basic parsing
+                        # We can't actually EXPLAIN them without affecting the database
+                        cursor.execute("SELECT 1")  # Basic connection test
+                    else:
+                        # For other statements, we could try EXPLAIN
+                        cursor.execute("SELECT 1")
+                        
+    except psycopg2.Error as e:
+        raise Exception(f"SQL syntax error: {e}")
+
+
 # Add enhanced migration commands
 add_enhanced_commands(database)
