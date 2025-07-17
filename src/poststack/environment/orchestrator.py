@@ -852,15 +852,44 @@ class EnvironmentOrchestrator:
             return False
 
     async def _stop_pod_deployment(self, pod_file: str, remove: bool = False) -> bool:
-        """Stop Podman Pod deployment."""
+        """Stop Podman Pod deployment with workaround for kube down termination bug."""
         try:
-            # Use podman play kube --down to stop the pod
-            cmd = ["podman", "play", "kube", "--down", pod_file]
-            
             if remove:
                 logger.info(f"Stopping and removing pod deployment: {pod_file}")
             else:
                 logger.info(f"Stopping pod deployment: {pod_file}")
+            
+            # WORKAROUND: Use podman pod stop before podman play kube --down
+            # This addresses the known Podman bug where kube down ignores terminationGracePeriodSeconds
+            # and immediately sends SIGKILL instead of proper graceful shutdown
+            # Reference: https://github.com/containers/podman/issues/19135
+            
+            # First, try to gracefully stop the pod using podman pod stop
+            pod_name = await self._extract_pod_name_from_file(pod_file)
+            if pod_name:
+                logger.debug(f"Attempting graceful pod stop for: {pod_name}")
+                stop_cmd = ["podman", "pod", "stop", pod_name]
+                
+                try:
+                    stop_process = await asyncio.create_subprocess_exec(
+                        *stop_cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
+                    
+                    stop_stdout, stop_stderr = await stop_process.communicate()
+                    
+                    if stop_process.returncode == 0:
+                        logger.debug(f"Pod {pod_name} stopped gracefully")
+                    else:
+                        # Pod may already be stopped or not exist, continue with kube down
+                        logger.debug(f"Pod stop returned {stop_process.returncode}, continuing with kube down")
+                        
+                except Exception as e:
+                    logger.debug(f"Pod stop failed (expected if pod doesn't exist): {e}")
+            
+            # Now use podman play kube --down to clean up the pod deployment
+            cmd = ["podman", "play", "kube", "--down", pod_file]
             
             process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -886,6 +915,18 @@ class EnvironmentOrchestrator:
         except Exception as e:
             logger.error(f"Failed to stop pod deployment {pod_file}: {e}")
             return False
+    
+    async def _extract_pod_name_from_file(self, pod_file: str) -> str:
+        """Extract pod name from Kubernetes YAML file."""
+        try:
+            import yaml
+            with open(pod_file, 'r') as f:
+                doc = yaml.safe_load(f)
+                if doc and doc.get('kind') == 'Pod':
+                    return doc.get('metadata', {}).get('name', '')
+        except Exception as e:
+            logger.debug(f"Failed to extract pod name from {pod_file}: {e}")
+        return ""
     
     async def _force_remove_pod_from_file(self, pod_file: str) -> bool:
         """Force remove pod based on deployment file metadata."""

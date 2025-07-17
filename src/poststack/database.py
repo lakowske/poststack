@@ -710,8 +710,13 @@ def shell(ctx: click.Context, command: Optional[str]) -> None:
     is_flag=True,
     help="Show what migrations would be applied without running them",
 )
+@click.option(
+    "--yes",
+    is_flag=True,
+    help="Auto-confirm migration application without prompting",
+)
 @click.pass_context
-def migrate_project(ctx: click.Context, migrations_path: Path, dry_run: bool) -> None:
+def migrate_project(ctx: click.Context, migrations_path: Path, dry_run: bool, yes: bool) -> None:
     """Run project-specific database migrations from local migrations directory."""
     config: PoststackConfig = ctx.obj["config"]
 
@@ -753,7 +758,7 @@ def migrate_project(ctx: click.Context, migrations_path: Path, dry_run: bool) ->
             click.echo("\n🔍 Dry run - no migrations were executed")
             return
 
-        if not click.confirm(f"\nApply {len(migration_files)} migration(s)?"):
+        if not yes and not click.confirm(f"\nApply {len(migration_files)} migration(s)?"):
             click.echo("Migration cancelled")
             return
 
