@@ -255,102 +255,42 @@ class PoststackConfig(BaseSettings):
         return self.database_url is not None or self.get_auto_detected_database_url() is not None
 
     def get_auto_detected_database_url(self) -> Optional[str]:
-        """Auto-detect database URL from running PostgreSQL containers."""
+        """Auto-detect database URL from environment variables."""
         try:
-            # First try deployment-based auto-detection (new multi-service architecture)
-            deployment_url = self._get_deployment_postgres_url()
-            if deployment_url:
-                logger.info(f"Auto-detected PostgreSQL from deployment: {deployment_url.split('@')[1] if '@' in deployment_url else deployment_url}")
-                return deployment_url
+            # Check for common environment variables
+            if "DATABASE_URL" in os.environ:
+                logger.info("Auto-detected DATABASE_URL from environment")
+                return os.environ["DATABASE_URL"]
             
-            # Fallback to legacy container auto-detection
-            from .container_runtime import PostgreSQLRunner
+            if "POSTGRES_URL" in os.environ:
+                logger.info("Auto-detected POSTGRES_URL from environment")
+                return os.environ["POSTGRES_URL"]
             
-            postgres_runner = PostgreSQLRunner(self)
-            auto_url = postgres_runner.get_primary_postgres_url()
+            # Check for standard PostgreSQL environment variables
+            if all(var in os.environ for var in ["POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD"]):
+                host = os.environ.get("POSTGRES_HOST", "localhost")
+                port = os.environ.get("POSTGRES_PORT", "5432")
+                db = os.environ["POSTGRES_DB"]
+                user = os.environ["POSTGRES_USER"]
+                password = os.environ["POSTGRES_PASSWORD"]
+                
+                url = f"postgresql://{user}:{password}@{host}:{port}/{db}"
+                logger.info(f"Auto-detected PostgreSQL from environment variables: {host}:{port}/{db}")
+                return url
             
-            if auto_url:
-                logger.info(f"Auto-detected PostgreSQL container: {auto_url.split('@')[1] if '@' in auto_url else auto_url}")
-                return auto_url
-            else:
-                logger.debug("No running PostgreSQL containers found for auto-detection")
-                return None
+            logger.debug("No database URL found in environment variables")
+            return None
                 
         except Exception as e:
             logger.debug(f"Failed to auto-detect database URL: {e}")
             return None
 
     def _get_deployment_postgres_url(self) -> Optional[str]:
-        """Get PostgreSQL URL from deployment configuration."""
-        try:
-            # Import here to avoid circular imports
-            from .environment.config import EnvironmentConfigParser
-            
-            # Get current environment name
-            env_name = os.getenv('POSTSTACK_ENVIRONMENT', 'dev')
-            
-            parser = EnvironmentConfigParser(self)
-            env_config = parser.get_environment_config(env_name)
-            project_config = parser.load_project_config()
-            
-            # Find PostgreSQL deployment by type
-            postgres_deployment = None
-            for deployment in env_config.deployments:
-                if deployment.enabled and deployment.type == 'postgres':
-                    postgres_deployment = deployment
-                    break
-            
-            if not postgres_deployment:
-                logger.debug("No enabled PostgreSQL deployment found")
-                return None
-            
-            # Extract connection details from deployment variables
-            variables = postgres_deployment.variables
-            db_host = variables.get('DB_HOST', 'localhost')
-            db_port = variables.get('DB_PORT', '5432')
-            db_name = variables.get('DB_NAME', 'postgres')
-            db_user = variables.get('DB_USER', 'postgres') 
-            db_password = variables.get('DB_PASSWORD', '')
-            
-            # Check if container is actually running by looking for the expected container name
-            expected_container_name = f"{project_config.project.name}-postgres-{env_name}-postgres"
-            
-            import subprocess
-            try:
-                cmd = ["podman", "ps", "--format", "json"]
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-                
-                if result.returncode == 0:
-                    import json
-                    containers = json.loads(result.stdout.strip()) if result.stdout.strip() else []
-                    
-                    container_running = any(
-                        expected_container_name in container.get('Names', [])
-                        for container in containers
-                    )
-                    
-                    if not container_running:
-                        logger.debug(f"PostgreSQL container {expected_container_name} not running")
-                        return None
-                        
-            except Exception as e:
-                logger.debug(f"Failed to check container status: {e}")
-                return None
-            
-            # Build database URL
-            if db_password:
-                database_url = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
-            else:
-                database_url = f"postgresql://{db_user}@{db_host}:{db_port}/{db_name}"
-                
-            logger.debug(f"Built PostgreSQL URL from deployment config: postgresql://{db_user}:***@{db_host}:{db_port}/{db_name}")
-            return database_url
-            
-        except Exception as e:
-            logger.debug(f"Failed to get deployment PostgreSQL URL: {e}")
-            return None
+        """Get PostgreSQL URL from deployment configuration (simplified)."""
+        # Deployment configuration removed - use environment variables instead
+        logger.debug("Deployment configuration removed - use environment variables for database connection")
+        return None
     
-    @property
     def effective_database_url(self) -> Optional[str]:
         """Get the effective database URL (explicit or auto-detected)."""
         if self.database_url:

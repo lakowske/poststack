@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "poststack"
 version = "0.1.0"
-description = "PostgreSQL container management with SQL-based schema migration"
+description = "PostgreSQL database and schema migration management"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
@@ -33,7 +33,7 @@ dependencies = [
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
     "python-dotenv>=1.0.0",
-    "jinja2>=3.0.0",
+    "PyYAML>=6.0.0",
 ]
 
 [project.optional-dependencies]

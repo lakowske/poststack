@@ -28,13 +28,10 @@ def test_config(temp_workspace):
     """Create a test configuration."""
     return PoststackConfig(
         database_url="postgresql://test:test@localhost:5432/testdb",
-        domain_name="test.example.com",
-        le_email="test@example.com",
         container_runtime="podman",
         log_level="DEBUG",
         verbose=True,
         log_dir=str(temp_workspace / "logs"),
-        cert_path=str(temp_workspace / "certs"),
     )
 
 

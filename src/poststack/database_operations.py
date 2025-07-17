@@ -1,9 +1,9 @@
 """
-Database operations module for Poststack
+Database operations module for Poststack (Database-Focused)
 
-Provides database connectivity, verification, and management using
-containerized PostgreSQL instances. Integrates with Phase 5 container
-runtime capabilities.
+Provides database connectivity, verification, and management for 
+external PostgreSQL instances. Container orchestration is handled 
+by Docker Compose.
 """
 
 import logging
@@ -14,7 +14,6 @@ from typing import Dict, Optional, Any
 from urllib.parse import urlparse
 
 from .config import PoststackConfig
-from .container_runtime import ContainerLifecycleManager, PostgreSQLRunner
 from .models import HealthCheckResult, RuntimeResult
 
 logger = logging.getLogger(__name__)
@@ -26,7 +25,7 @@ class DatabaseConnectionError(Exception):
 
 
 class DatabaseValidationError(Exception):
-    """Database validation related errors."""
+    """Database URL validation errors."""
     pass
 
 
@@ -34,80 +33,66 @@ class DatabaseURL:
     """Database URL parser and validator."""
     
     def __init__(self, url: str):
-        """Initialize with database URL."""
+        """Initialize database URL."""
         self.url = url
-        self.parsed = self._parse_url(url)
-    
-    def _parse_url(self, url: str) -> Dict[str, Any]:
-        """Parse database URL into components."""
-        if not url:
-            raise DatabaseValidationError("Database URL cannot be empty")
+        self.parsed = urlparse(url)
         
-        if not url.startswith(('postgresql://', 'postgres://')):
-            raise DatabaseValidationError("Database URL must start with postgresql:// or postgres://")
+        if not self.parsed.scheme:
+            raise DatabaseValidationError(f"Invalid database URL: {url}")
         
-        try:
-            parsed = urlparse(url)
-            
-            return {
-                'scheme': parsed.scheme,
-                'hostname': parsed.hostname or 'localhost',
-                'port': parsed.port or 5432,
-                'database': parsed.path.lstrip('/') if parsed.path else 'postgres',
-                'username': parsed.username or 'postgres',
-                'password': parsed.password or '',
-            }
-        except Exception as e:
-            raise DatabaseValidationError(f"Invalid database URL format: {e}")
+        if self.parsed.scheme not in ['postgresql', 'postgres']:
+            raise DatabaseValidationError(f"Unsupported database scheme: {self.parsed.scheme}")
     
     @property
     def hostname(self) -> str:
         """Get hostname."""
-        return self.parsed['hostname']
+        return self.parsed.hostname or 'localhost'
     
     @property
     def port(self) -> int:
         """Get port."""
-        return self.parsed['port']
+        return self.parsed.port or 5432
     
     @property
     def database(self) -> str:
         """Get database name."""
-        return self.parsed['database']
+        return self.parsed.path.lstrip('/') if self.parsed.path else 'postgres'
     
     @property
     def username(self) -> str:
         """Get username."""
-        return self.parsed['username']
+        return self.parsed.username or 'postgres'
     
     @property
     def password(self) -> str:
         """Get password."""
-        return self.parsed['password']
+        return self.parsed.password or ''
     
     def get_masked_url(self) -> str:
-        """Get URL with password masked."""
-        return re.sub(r"://([^:]+):([^@]+)@", r"://\1:***@", self.url)
+        """Get URL with masked password."""
+        if self.password:
+            return self.url.replace(f":{self.password}@", ":***@")
+        return self.url
     
     def test_connectivity(self, timeout: int = 10) -> bool:
-        """Test if the database port is accessible."""
+        """Test if database port is reachable."""
         try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.settimeout(timeout)
-                result = sock.connect_ex((self.hostname, self.port))
-                return result == 0
-        except Exception:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            result = sock.connect_ex((self.hostname, self.port))
+            sock.close()
+            return result == 0
+        except Exception as e:
+            logger.debug(f"Port connectivity test failed: {e}")
             return False
 
 
 class DatabaseManager:
-    """Database management using containerized PostgreSQL."""
+    """Database management for external PostgreSQL instances."""
     
     def __init__(self, config: PoststackConfig):
         """Initialize database manager."""
         self.config = config
-        self.container_manager = ContainerLifecycleManager(config)
-        self.postgres_runner = PostgreSQLRunner(config)
     
     def validate_database_url(self, url: str) -> DatabaseURL:
         """Validate and parse database URL."""
@@ -124,37 +109,15 @@ class DatabaseManager:
     def test_connection(
         self,
         database_url: str,
-        timeout: int = 30,
-        use_container: bool = False,
-        container_port: int = 5433
+        timeout: int = 30
     ) -> HealthCheckResult:
         """Test database connection."""
-        logger.info(f"Testing database connection (use_container={use_container})")
+        logger.info("Testing database connection")
         
         start_time = time.time()
         
         try:
             db_url = self.validate_database_url(database_url)
-            
-            # If using container, start PostgreSQL container first
-            if use_container:
-                logger.info("Starting PostgreSQL container for testing")
-                postgres_result, health_result = self.container_manager.start_test_environment(
-                    postgres_port=container_port
-                )
-                
-                if not postgres_result.success or not health_result.passed:
-                    return HealthCheckResult(
-                        container_name="database-test",
-                        check_type="connection_test",
-                        passed=False,
-                        message=f"Failed to start test PostgreSQL container: {postgres_result.logs}",
-                        response_time=time.time() - start_time
-                    )
-                
-                # Update database URL to use container port
-                test_url = database_url.replace(f":{db_url.port}", f":{container_port}")
-                db_url = self.validate_database_url(test_url)
             
             # Test port connectivity first
             if not db_url.test_connectivity(timeout=10):
@@ -170,8 +133,6 @@ class DatabaseManager:
             try:
                 import psycopg2
                 
-                logger.info(f"Attempting PostgreSQL connection to {db_url.get_masked_url()}")
-                
                 conn = psycopg2.connect(
                     host=db_url.hostname,
                     port=db_url.port,
@@ -181,37 +142,30 @@ class DatabaseManager:
                     connect_timeout=timeout
                 )
                 
-                # Test basic operations
+                # Test a simple query
                 cursor = conn.cursor()
-                cursor.execute("SELECT version(), current_database(), current_user;")
-                version, current_db, current_user = cursor.fetchone()
-                
-                cursor.execute("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';")
-                table_count = cursor.fetchone()[0]
-                
+                cursor.execute("SELECT 1")
+                result = cursor.fetchone()
                 cursor.close()
                 conn.close()
                 
-                response_time = time.time() - start_time
-                
-                logger.info(f"Database connection successful in {response_time:.2f}s")
-                
-                return HealthCheckResult(
-                    container_name="database-test",
-                    check_type="connection_test",
-                    passed=True,
-                    message=f"Database connection successful - {current_db} as {current_user}",
-                    response_time=response_time,
-                    details={
-                        "version": version,
-                        "database": current_db,
-                        "user": current_user,
-                        "table_count": table_count,
-                        "hostname": db_url.hostname,
-                        "port": db_url.port
-                    }
-                )
-                
+                if result and result[0] == 1:
+                    return HealthCheckResult(
+                        container_name="database-test",
+                        check_type="connection_test",
+                        passed=True,
+                        message=f"Database connection successful: {db_url.hostname}:{db_url.port}",
+                        response_time=time.time() - start_time
+                    )
+                else:
+                    return HealthCheckResult(
+                        container_name="database-test",
+                        check_type="connection_test",
+                        passed=False,
+                        message="Database query test failed",
+                        response_time=time.time() - start_time
+                    )
+                    
             except ImportError:
                 return HealthCheckResult(
                     container_name="database-test",
@@ -220,111 +174,28 @@ class DatabaseManager:
                     message="psycopg2 not available. Install with: pip install psycopg2-binary",
                     response_time=time.time() - start_time
                 )
-                
+            except Exception as e:
+                return HealthCheckResult(
+                    container_name="database-test",
+                    check_type="connection_test",
+                    passed=False,
+                    message=f"Database connection failed: {e}",
+                    response_time=time.time() - start_time
+                )
+        
         except Exception as e:
             logger.error(f"Database connection test failed: {e}")
             return HealthCheckResult(
                 container_name="database-test",
                 check_type="connection_test",
                 passed=False,
-                message=f"Connection failed: {e}",
-                response_time=time.time() - start_time
-            )
-        
-        finally:
-            # Clean up container if we started one
-            if use_container:
-                logger.info("Cleaning up test PostgreSQL container")
-                self.container_manager.cleanup_test_environment()
-    
-    def verify_database_requirements(self, database_url: str) -> HealthCheckResult:
-        """Verify database meets Poststack requirements."""
-        logger.info("Verifying database requirements")
-        
-        start_time = time.time()
-        
-        try:
-            # Test connection first
-            connection_result = self.test_connection(database_url)
-            if not connection_result.passed:
-                return connection_result
-            
-            import psycopg2
-            
-            db_url = self.validate_database_url(database_url)
-            conn = psycopg2.connect(
-                host=db_url.hostname,
-                port=db_url.port,
-                database=db_url.database,
-                user=db_url.username,
-                password=db_url.password
-            )
-            
-            cursor = conn.cursor()
-            
-            # Check PostgreSQL version (require 12+)
-            cursor.execute("SHOW server_version_num;")
-            version_num = int(cursor.fetchone()[0])
-            if version_num < 120000:  # PostgreSQL 12.0
-                cursor.close()
-                conn.close()
-                return HealthCheckResult(
-                    container_name="database-requirements",
-                    check_type="requirements_check",
-                    passed=False,
-                    message=f"PostgreSQL version {version_num} is too old. Requires 12.0 or newer.",
-                    response_time=time.time() - start_time
-                )
-            
-            # Check required extensions availability
-            required_extensions = ['uuid-ossp']  # Add more as needed
-            missing_extensions = []
-            
-            for ext in required_extensions:
-                cursor.execute(
-                    "SELECT EXISTS(SELECT 1 FROM pg_available_extensions WHERE name = %s);",
-                    (ext,)
-                )
-                if not cursor.fetchone()[0]:
-                    missing_extensions.append(ext)
-            
-            cursor.close()
-            conn.close()
-            
-            if missing_extensions:
-                return HealthCheckResult(
-                    container_name="database-requirements",
-                    check_type="requirements_check",
-                    passed=False,
-                    message=f"Missing required extensions: {', '.join(missing_extensions)}",
-                    response_time=time.time() - start_time
-                )
-            
-            return HealthCheckResult(
-                container_name="database-requirements",
-                check_type="requirements_check",
-                passed=True,
-                message="Database meets all Poststack requirements",
-                response_time=time.time() - start_time,
-                details={
-                    "postgres_version": version_num,
-                    "required_extensions": required_extensions
-                }
-            )
-            
-        except Exception as e:
-            logger.error(f"Database requirements verification failed: {e}")
-            return HealthCheckResult(
-                container_name="database-requirements",
-                check_type="requirements_check",
-                passed=False,
-                message=f"Requirements check failed: {e}",
+                message=f"Connection test failed: {e}",
                 response_time=time.time() - start_time
             )
     
     def get_database_info(self, database_url: str) -> Dict[str, Any]:
-        """Get comprehensive database information."""
-        logger.info("Retrieving database information")
+        """Get database information."""
+        logger.info("Getting database information")
         
         try:
             db_url = self.validate_database_url(database_url)
@@ -336,67 +207,66 @@ class DatabaseManager:
                 port=db_url.port,
                 database=db_url.database,
                 user=db_url.username,
-                password=db_url.password
+                password=db_url.password,
+                connect_timeout=10
             )
             
             cursor = conn.cursor()
             
-            # Get basic database info
-            cursor.execute("""
-                SELECT 
-                    version() as version,
-                    current_database() as database,
-                    current_user as user,
-                    inet_server_addr() as server_addr,
-                    inet_server_port() as server_port,
-                    pg_database_size(current_database()) as size_bytes
-            """)
-            basic_info = cursor.fetchone()
+            # Get database version
+            cursor.execute("SELECT version()")
+            version = cursor.fetchone()[0]
             
-            # Get schema info
-            cursor.execute("""
-                SELECT 
-                    schemaname,
-                    COUNT(*) as table_count
-                FROM pg_tables 
-                GROUP BY schemaname
-                ORDER BY schemaname
-            """)
-            schemas = cursor.fetchall()
+            # Get database size
+            cursor.execute(f"SELECT pg_size_pretty(pg_database_size('{db_url.database}'))")
+            size = cursor.fetchone()[0]
             
             # Get connection info
-            cursor.execute("""
-                SELECT 
-                    COUNT(*) as total_connections,
-                    COUNT(*) FILTER (WHERE state = 'active') as active_connections
-                FROM pg_stat_activity
-            """)
-            connection_info = cursor.fetchone()
+            cursor.execute("SELECT current_database(), current_user")
+            current_db, current_user = cursor.fetchone()
             
             cursor.close()
             conn.close()
             
             return {
-                "connection": {
-                    "hostname": db_url.hostname,
-                    "port": db_url.port,
-                    "database": basic_info[1],
-                    "user": basic_info[2]
-                },
-                "server": {
-                    "version": basic_info[0],
-                    "address": basic_info[3],
-                    "port": basic_info[4],
-                    "size_bytes": basic_info[5],
-                    "size_mb": round(basic_info[5] / 1024 / 1024, 2) if basic_info[5] else 0
-                },
-                "schemas": [{"name": schema[0], "table_count": schema[1]} for schema in schemas],
-                "connections": {
-                    "total": connection_info[0],
-                    "active": connection_info[1]
-                }
+                "version": version,
+                "size": size,
+                "current_database": current_db,
+                "current_user": current_user,
+                "hostname": db_url.hostname,
+                "port": db_url.port
             }
             
         except Exception as e:
             logger.error(f"Failed to get database info: {e}")
             raise DatabaseConnectionError(f"Failed to get database info: {e}")
+    
+    def verify_database_availability(self, database_url: str, timeout: int = 30) -> RuntimeResult:
+        """Verify database is available and accessible."""
+        logger.info("Verifying database availability")
+        
+        start_time = time.time()
+        
+        try:
+            connection_result = self.test_connection(database_url, timeout)
+            
+            if connection_result.passed:
+                return RuntimeResult(
+                    success=True,
+                    message="Database is available and accessible",
+                    runtime_seconds=time.time() - start_time
+                )
+            else:
+                return RuntimeResult(
+                    success=False,
+                    message=f"Database unavailable: {connection_result.message}",
+                    runtime_seconds=time.time() - start_time
+                )
+                
+        except Exception as e:
+            logger.error(f"Database availability check failed: {e}")
+            return RuntimeResult(
+                success=False,
+                message=f"Database availability check failed: {e}",
+                runtime_seconds=time.time() - start_time
+            )
